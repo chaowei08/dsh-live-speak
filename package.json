@@ -1,0 +1,44 @@
+{
+  "name": "dsh-live-speak",
+  "version": "1.0.0",
+  "description": "用高保真神经语音实时播报模型输出（边生成边念），自带播放器，可随时暂停/恢复/停止。",
+  "type": "module",
+  "main": "./index.js",
+  "license": "MIT",
+  "author": "dsh-live-speak",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chaowei08/dsh-live-speak.git"
+  },
+  "homepage": "https://github.com/chaowei08/dsh-live-speak#readme",
+  "bugs": {
+    "url": "https://github.com/chaowei08/dsh-live-speak/issues"
+  },
+  "keywords": ["dsh", "dsh-plugin", "tts", "speech", "neural-tts", "voice"],
+  "files": ["index.js", "client/", "cordis.patch.yml", "README.md", "RELEASE-NOTES.md", "icon.svg"],
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./icon": "./icon.svg",
+    "./client": "./client/client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dependencies": {
+    "@andresaya/edge-tts": "^1.9.1"
+  }
+}
