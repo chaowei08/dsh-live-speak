@@ -14,7 +14,24 @@
   "bugs": {
     "url": "https://github.com/chaowei08/dsh-live-speak/issues"
   },
-  "keywords": ["dsh", "dsh-plugin", "tts", "speech", "neural-tts", "voice"],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-extension",
+    "deepseek-harness",
+    "cordis",
+    "tts",
+    "text-to-speech",
+    "speech",
+    "speech-synthesis",
+    "neural-tts",
+    "voice",
+    "voiceover",
+    "narration",
+    "read-aloud",
+    "audio",
+    "accessibility"
+  ],
   "files": ["index.js", "client/", "cordis.patch.yml", "README.md", "RELEASE-NOTES.md", "icon.svg"],
   "exports": {
     ".": "./index.js",
