@@ -452,7 +452,9 @@ function cleanForSpeech(raw) {
   text = text.replace(/`([^`]*)`/gu, '$1')
   // 标题行不补句号，改补省略号：句号只给 200 毫秒，听起来还是"帘卷西风济南的趵突泉边"一句；
   // 省略号的停顿明显长一截，标题和正文才听得出是两件事。
-  text = text.replace(/^\s{0,3}#{1,6}\s+(.+)$/gmu, (match, title) => (/[。！？!?：:,，…]$/u.test(title) ? title : `${title}……`))
+  // （2026-11 实测推翻上面这条：24kHz MP3 里省略号的停顿比无标点还短，句号才有真正的断句。
+  //  所以这里补句号，标题和正文之间才有约 0.39 秒的空隙。）
+  text = text.replace(/^\s{0,3}#{1,6}\s+(.+)$/gmu, (match, title) => (/[。！？!?：:,，…]$/u.test(title) ? title : `${title}。`))
   text = text.replace(/^\s{0,3}>\s?/gmu, '')
   text = text.replace(/^\s{0,3}[-*+]\s+/gmu, '')
   text = text.replace(/^\s{0,3}\d+[.)]\s+/gmu, '')
@@ -469,8 +471,10 @@ function cleanForSpeech(raw) {
   // 收尾：压缩空白，逐行补停顿标点（换行是分段的天然边界）
   text = text.replace(/[ \t\u00A0]+/gu, ' ')
   text = text.replace(/\s+([。！？!?…；;，,])/gu, '$1')
-  // 替换文件名后会在中文之间留一个空格（"已保存为 网页"），TTS 会读成停顿，顺手抹掉
-  text = text.replace(/([\u4E00-\u9FFF])\s+(?=[\u4E00-\u9FFF])/gu, '$1')
+  // 替换文件名后会在中文之间留一个空格（"已保存为 网页"），TTS 会读成停顿，顺手抹掉。
+  // 只能抹行内空白：换成 \s 会把换行一起吃掉，把单独一行的标题粘进下一段正文
+  // （"老书店的下午" + 换行 + "街角那家……" 变成一整句），短行补省略号的分支就永远走不到。
+  text = text.replace(/([\u4E00-\u9FFF])[ \t\u00A0]+(?=[\u4E00-\u9FFF])/gu, '$1')
   const lines = text
     .split('\n')
     .map((line) => line.trim())
@@ -479,8 +483,9 @@ function cleanForSpeech(raw) {
   text = lines
     .map((line) => {
       if (/[。！？!?…；;：:，,]$/u.test(line)) return line
-      // 短、没逗号的一行，基本就是没写成 Markdown 的小标题：补省略号，让停顿明显
-      if (line.length <= TITLE_LINE_MAX && !/[，,：:；;]/u.test(line)) return `${line}……`
+      // 短、没逗号的一行，基本就是没写成 Markdown 的小标题；长句是正文。
+      // 两者都补句号——省略号在 Edge 的声线里几乎没有停顿（实测比无标点还短），
+      // 只有句号才有断句，标题和正文才听得出是两件事。
       return `${line}。`
     })
     .join('\n')
