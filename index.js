@@ -48,6 +48,15 @@ const MAX_SEGMENT_CHARS = 300
  */
 const FIRST_CHUNK_CHARS = 130
 /**
+ * 首块切出前置段之后，剩下的尾巴不足这么多字，就干脆不切。
+ *
+ * 实测（1.0.7 首轮）：137 字的首块被切成 117 + 20，那个 20 字的尾巴只播 4 秒，
+ * 却要单独排一次合成，撞上限流连失败两次，前后等了 24 秒才出声——
+ * 播放器在它前面空了 7.8 秒，在它后面又空了 14 秒。4 秒的段换 21.8 秒空白，
+ * 怎么算都不值。不如整段一次合成：最多晚 1 秒开口，少一次超时机会。
+ */
+const FIRST_TAIL_MIN_CHARS = 40
+/**
  * 合成失败的重试次数与基准等待，429 走指数退避。
  *
  * 这一层是"快速自救"：单次 8 秒没数据就算超时，退避 0.9 秒再试一次。
@@ -980,7 +989,11 @@ function chunkText(text, targetChars, firstChunkChars = 0) {
     // 首句没更快，反而多了五次超时机会（日志里一篇 13 段有 6 段是这种碎片）。
     const lead = head[0]
     const rest = head.slice(1).join('')
-    merged.splice(0, 1, ...(rest.trim() === '' ? [lead] : [lead, rest]));
+    // 尾巴太短就不切了：它只播几秒，却要独立排一次合成，撞上限流就是十几秒空白。
+    // 阈值以下整段一起合成，第一声最多晚一秒，但少掉一次超时的机会。
+    if (rest.trim().length >= FIRST_TAIL_MIN_CHARS) {
+      merged.splice(0, 1, lead, rest)
+    }
   }
   return merged
 }
