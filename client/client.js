@@ -64,6 +64,7 @@
             "empty.none": "没有待播内容",
             "empty.streaming": "正在生成下一句…",
             "empty.synth": "正在合成下一段…",
+            "empty.trouble": "语音服务暂无响应，正在重试（已 {s} 秒）",
             "act.pause": "暂停",
             "act.play": "播放 / 继续",
             "act.stop": "停止（清空队列）",
@@ -151,6 +152,7 @@
             "empty.none": "Nothing queued",
             "empty.streaming": "Generating the next line…",
             "empty.synth": "Voicing the next part…",
+            "empty.trouble": "Voice service not responding, retrying… ({s}s)",
             "act.pause": "Pause",
             "act.play": "Play / Resume",
             "act.stop": "Stop (clear queue)",
@@ -238,6 +240,7 @@
             "empty.none": "再生待ちはありません",
             "empty.streaming": "次の文を生成中…",
             "empty.synth": "次の部分を音声化中…",
+            "empty.trouble": "音声サービスが応答しません。再試行中…（{s} 秒）",
             "act.pause": "一時停止",
             "act.play": "再生 / 再開",
             "act.stop": "停止（キューを消去）",
@@ -642,6 +645,8 @@
           // 空档里不能一律写"没有待播内容"，那会让几秒静默看起来像卡死了。
           pending: 0,
           synthBusy: false,
+          // 合成连续失败的状态（宿主给）：卡片据此说明"在重试"，而不是装作没事
+          trouble: null,
           listeners: [],
           pollTimer: null,
           stopTimer: null
@@ -723,6 +728,7 @@
             // 后端还没合成完的段：空档期用来判断"在合成"，而不是"没内容"
             pending: manager.pending || 0,
             synthBusy: manager.synthBusy === true,
+            trouble: manager.trouble,
             progress: manager.progress,
             duration: manager.duration,
             error: manager.error,
@@ -751,6 +757,11 @@
          * 中间两种以前都写成"没有待播内容"，几秒静默看起来就像插件卡住了。
          */
         function idleLabel(state, t) {
+          // 合成连续失败十几秒是最要紧的信息：这时卡片本来该是静止的，
+          // 不写"在重试"用户只会以为插件死了，然后去重启它。
+          if (state.trouble && Number(state.trouble.seconds) >= 15) {
+            return t("empty.trouble").replace("{s}", String(state.trouble.seconds));
+          }
           if (state.error !== "") return state.error;
           if (state.streaming) return t("empty.streaming");
           if ((state.pending || 0) > 0 || state.synthBusy === true) return t("empty.synth");
@@ -1336,9 +1347,14 @@
               // 空档期给歌词区一个准确说法：还在合成 / 在等模型 / 真没内容
               var nextPending = Number(data.pending) || 0;
               var nextBusy = data.synthesizing === true;
-              if (nextPending !== manager.pending || nextBusy !== manager.synthBusy) {
+              // 合成连续失败的状态：只在"从无到有"或秒数变化时重绘，避免每次轮询都白刷一遍
+              var nextTrouble = data.trouble || null;
+              var troubleChanged = (nextTrouble === null) !== (manager.trouble === null)
+                || (nextTrouble !== null && manager.trouble !== null && nextTrouble.seconds !== manager.trouble.seconds);
+              if (nextPending !== manager.pending || nextBusy !== manager.synthBusy || troubleChanged) {
                 manager.pending = nextPending;
                 manager.synthBusy = nextBusy;
+                manager.trouble = nextTrouble;
                 emit();
               }
               var appended = false;

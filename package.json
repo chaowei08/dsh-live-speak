@@ -1,6 +1,6 @@
 {
   "name": "dsh-live-speak",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "用高保真神经语音实时播报模型输出（边生成边念），自带播放器，可随时暂停/恢复/停止。",
   "type": "module",
   "main": "./index.js",

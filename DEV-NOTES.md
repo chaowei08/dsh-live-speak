@@ -188,6 +188,44 @@ fetch('/plugins/dsh-live-speak/speak', {
 
 ---
 
+## 2026-11-13 · 1.0.4：合成异常的用户可见提示
+
+**背景**：线上语音服务端从 18:12 起连续不可用（`speech.platform.bing.com` 连得上，但 8 秒内不返回任何数据），插件按「绝不跳段」策略无限重试。用户端完全看不出异常——卡片只写「正在合成下一段…」，静止不动，看起来像插件死了。
+
+**根因**：宿主 `snapshot()` 一直在返回 `error` 与 `failCount`，但客户端 `client.js` **从未读取过 `data.error`**；`manager.error` 只在本机播放失败时被赋值。所以「服务端持续失败」这条链路在界面上是隐形的。
+
+**改法（宿主 `index.js`）**
+
+- 新增 `synthTroubleSince`（连续失败起点，0＝正常）：`synth ok` 清零，catch 里首次失败置位
+- `snapshot()` 增 `trouble`：距今 ≥15 秒才返回 `{ seconds, error }`，否则 `null`
+- `resetQueue({ epochChange: true })` 一并清零（换一篇不带上上一篇的秒数）
+- catch 里置位前加 `epoch === myEpoch` 判断——**清空/换篇之后才返回的旧尝试不算**
+
+**改法（客户端 `client/client.js`）**
+
+- i18n 三语增 `empty.trouble`（zh「语音服务暂无响应，正在重试（已 {s} 秒）」/ en / ja）
+- `manager.trouble` + `emit` 透出 + `poll` 里同步（只在 null 变化或秒数变化时重绘）
+- `idleLabel()` 加最优先分支；它被主面板（2 处）、顶栏、侧栏共 4 处调用，三种形态全覆盖
+
+**踩到的坑（值得记住）**
+
+第一版只判断「失败超过 15 秒」，没判断「是否还在合成」。结果点清空后 `working` 已经 false、`pending` 已经 0，那行「正在重试」还挂着不动。实测 `/state` 返回过 `{"epoch":5,"pending":0,"working":false,"trouble":{"seconds":119,...}}`。
+
+两处补救：① `snapshot()` 条件加 `|| !working`，pump 不在跑就不报；② 上面那条 `epoch === myEpoch`，防止旧尝试把计时重新点亮。
+
+**实测证据**
+
+| 场景 | 结果 |
+|---|---|
+| 线上服务端真实故障（18:12 起） | 第 24 秒卡片出现「语音服务暂无响应，正在重试（已 24 秒）」 |
+| 本地档无后端（确定性失败） | 第 21 秒出现同一文案 |
+| 随后 `/clear` | 提示撤掉，卡片回到「正在合成下一段…」→「没有待播内容」 |
+| 服务端恢复（10:39:38 `synth ok`） | `trouble` 自然回 `null`，提示消失 |
+
+**DevTools 操作坑（本轮又踩了）**：console 内容变多后，按坐标点提示符容易点偏，命令会静默不发（光标没落进去）。稳妥流程：先输 `1+1` 确认焦点在 console，再 `cu.hotkey("ctrl","l")` 清屏后重发；`cu.press` 只接受单键，组合键必须用 `cu.hotkey`。
+
+---
+
 ## 发版流程（每次都一样）
 
 1. 改 `package.json` 的 `version`，只走最小步长（`1.0.1` → `1.0.2`），不跳版本
@@ -206,7 +244,7 @@ fetch('/plugins/dsh-live-speak/speak', {
 
 - 均衡器三个预设（clarity / soft / deep）只做了参数，没有真机听感验证；当前配置是全 0
 - mac 的 `say` 路径仍无实机验证（二进制在 Windows 上不存在）；Linux 的 espeak 路径已用 Windows 版 espeak-ng 做过等价验证（见上节），但真 Linux 环境差异未覆盖
-- Linux 若连 `espeak-ng` 都没装，本地档会完全无声：日志有提示，但设置页没有可见文案，而且合成泵会按「不放弃」策略**一直重试**（每段退避到 15 秒一次），表现为长时间静默 + 日志刷屏。这是已知缺陷，未修——要么在 `synthesizeLocalEspeak` 里给 `ENOENT` 打不可重试标记，要么在设置页把「未检测到本机声线」显示出来
+- Linux 若连 `espeak-ng` 都没装，本地档会完全无声。1.0.3 已把 `ENOENT`/`EACCES` 标成不可重试（退避 60 秒、日志每 10 次一条），但仍然「一直重试、绝不跳段」；设置页仍**没有**「未检测到本机声线」的可见文案，这一条还没做
 - espeak-ng 数据目录找不到时会崩溃（`0xC0000005`）而不是报错退出，非标准安装方式可能踩到
 - `ttsEngine` 的 `auto` 兼容值仍在校验白名单里，行为等同 `edge`，没有清掉
 - 实时流式路径（门槛 140 字 + 动态软切）只用整段直喂验证过，真实流式效果没单独测

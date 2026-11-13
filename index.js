@@ -1139,6 +1139,12 @@ export function apply(ctx, config = {}) {
     let working = false
     let lastError = ''
     let synthFailCount = 0
+    /**
+     * 连续失败是从什么时候开始的（毫秒），0 表示当前正常。
+     * 用来给界面一个明确说法：合成卡在门外十几秒时，用户需要知道"它在重试"，
+     * 而不是看着一张静止的卡片以为插件死了。
+     */
+    let synthTroubleSince = 0
 
     /** Edge TTS 实例懒加载：依赖缺失/网络异常都不该影响 DSH 启动。 */
     let engine = null
@@ -1178,6 +1184,8 @@ export function apply(ctx, config = {}) {
       ready.clear()
       jobs.length = 0
       if (epochChange) epoch += 1
+      // 换一篇就把「合成异常」的计时归零，否则新一篇会带着上一篇的秒数继续报
+      if (epochChange) synthTroubleSince = 0
       bump()
     }
 
@@ -1902,6 +1910,7 @@ export function apply(ctx, config = {}) {
               ready.set(item.id, item)
               lastError = ''
               synthFailCount = 0
+              synthTroubleSince = 0
               trimReady()
               // 日志里的声线名要写「真正发声的那条」：本地档是系统声线（瑶瑶/Huihui），
               // 不是 Edge 的 id，否则又会造出「显示晓晓、实际念瑶瑶」那种假记录
@@ -1911,6 +1920,10 @@ export function apply(ctx, config = {}) {
             } catch (error) {
               attempt += 1
               synthFailCount += 1
+              // 第一次失败就记下起点，之后一直累积；成功一次就清零（见上面的 synth ok）。
+              // 只认当前这一篇的失败：被清空/换篇之后才返回的旧尝试不算，
+              // 否则点完"停止"卡片会一直挂着"正在重试"，实际什么都没在做。
+              if (epoch === myEpoch && synthTroubleSince === 0) synthTroubleSince = Date.now()
               lastError = String(error?.message ?? error).split('\n')[0]
               bump()
               if (epoch !== myEpoch) break
@@ -2141,6 +2154,17 @@ export function apply(ctx, config = {}) {
         voices: VOICES,
         error: lastError,
         failCount: synthFailCount,
+        /**
+         * 合成连续失败超过 15 秒时的状态，正常为 null。
+         * 只在"确实还在合成"时报：清空队列、或者这一篇被推走之后，
+         * pump 已经不在跑，残留的失败计时不该继续挂在卡片上。
+         */
+        trouble: (synthTroubleSince === 0 || !working)
+          ? null
+          : (() => {
+            const seconds = Math.round((Date.now() - synthTroubleSince) / 1000)
+            return seconds >= 15 ? { seconds, error: lastError } : null
+          })(),
       }
     }
 
