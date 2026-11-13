@@ -1570,6 +1570,12 @@ export function apply(ctx, config = {}) {
       execFile('say', args, { timeout: 25_000 }, (error) => {
         if (error) {
           cleanup()
+          // say 是系统自带，正常不会缺；被裁剪的发行版或沙盒里可能没有。
+          // 这是确定性失败：重试多少次都不会出声，标成 fatal 让合成泵放慢重试。
+          if (error.code === 'ENOENT' || error.code === 'EACCES') {
+            error.fatal = true
+            error.message = `local say unavailable (${error.code})`
+          }
           reject(error)
           return
         }
@@ -1617,6 +1623,13 @@ export function apply(ctx, config = {}) {
       execFile(bin, args, { timeout: 25_000 }, (error) => {
         if (error) {
           cleanup()
+          // 二进制根本不在（Linux 上没装 espeak-ng / espeak）：确定性失败。
+          // 重试一万次也不会出声，标成 fatal 让合成泵把重试间隔拉到 60 秒，
+          // 而不是每 15 秒刷一条日志、整篇却一直静默。
+          if (error.code === 'ENOENT' || error.code === 'EACCES') {
+            error.fatal = true
+            error.message = `local espeak binary unavailable: ${bin} (${error.code})`
+          }
           reject(error)
           return
         }
@@ -1899,9 +1912,20 @@ export function apply(ctx, config = {}) {
               attempt += 1
               synthFailCount += 1
               lastError = String(error?.message ?? error).split('\n')[0]
-              log(`synth fail id=${id} chars=${text.length} attempt=${attempt} err=${lastError}`)
               bump()
               if (epoch !== myEpoch) break
+              // 后端二进制不存在（Linux 没装 espeak-ng，或 mac 上的 say 被裁掉）属于确定性失败：
+              // 重试一万次也不会出声，但这一段也不能丢（内容完整性优先）。
+              // 所以照样一直重试——用户装上后端、或切回线上档（epoch 变化）就自动恢复——
+              // 只把间隔拉到 60 秒、日志每 10 次才报一条，避免整篇静默的同时还在刷屏。
+              if (error?.fatal) {
+                if (attempt % 10 === 1) {
+                  log(`local backend unavailable id=${id} attempt=${attempt} err=${lastError} retry_in=60s`)
+                }
+                await sleep(60_000)
+                continue
+              }
+              log(`synth fail id=${id} chars=${text.length} attempt=${attempt} err=${lastError}`)
               // 退避翻倍、封顶 15 秒：Edge 恢复后这一段一定能补上，只是可能要等一会儿
               const backoff = Math.min(SYNTH_RETRY_BASE_MS * 2 ** Math.min(attempt - 1, 4), SYNTH_RETRY_MAX_MS)
               log(`synth retry id=${id} attempt=${attempt} retry_in=${backoff}ms`)

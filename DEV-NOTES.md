@@ -90,6 +90,80 @@ play-start id=2（间隔 2ms）→ play-end id=2 elapsed=24.72
 
 ---
 
+## 2026-11-13 · mac/Linux 本地合成路径验证
+
+### 怎么在没有 mac 的机器上验证
+
+`say` 在 Windows 上不存在，无法执行。但 Linux 分支用的 `espeak-ng` 有 Windows 版，**同一个程序、同一套命令行**，可以真跑。
+
+验证方式选**便携解包**，不装进系统：
+
+```
+msiexec /a espeak-ng.msi /qb TARGETDIR=<临时目录>\
+```
+
+`/a` 是 administrative install，只把文件摊开，不写注册表、不碰 `Program Files`、不改 `PATH`。测完删目录即可完全还原。
+
+**踩坑**：解包出来的 `espeak-ng.exe` 直接跑会崩（`0xC0000005`，访问违例），必须先设
+
+```
+ESPEAK_DATA_PATH=<解包目录>
+```
+
+设完 `--version` 与 `--voices` 都正常。这个坑对 Linux 同样有参考价值：**数据目录找不到时 espeak-ng 不是报错而是崩**，非标准安装方式（snap / flatpak / AppImage）可能踩到。
+
+### 真实 `--voices` 输出的三个特征
+
+之前按记忆构造的样本是错的，真实输出（223 行）是这样：
+
+```
+Pty Language       Age/Gender VoiceName          File                 Other Languages
+ 5  af              --/M      Afrikaans          gmw\af
+ 5  cmn             --/M      Chinese_(Mandarin,_latin_as_English) sit\cmn   (zh-cmn 5)(zh 5)
+```
+
+1. 性别列是 `--/M` 这种**双字段**形态，不是单个 `M`
+2. VoiceName 里的空格被**下划线**转义（`Chinese_(Mandarin,_latin_as_English)`）。所以按空白切列不会切断名字——**之前担心的「显示名截断」并不存在**，那条结论作废
+3. File 列 Windows 用反斜杠 `gmw\af`，Linux 用 `gmw/af`
+
+用这份真实输出跑 `probeEspeakVoices` 的解析逻辑：222 条全部正确，中文四条 `cmn` / `cmn-latn-pinyin` / `yue` / `yue`，id 与显示名都对得上。
+
+### 合成 + 读回
+
+```
+espeak-ng -w out.wav -f text.txt -s 189 -v cmn
+```
+
+41 字中文 → 419762 字节 → **9.517 秒**（4.31 字/秒）。文件是标准 `RIFF/WAVE`，22050Hz / 16bit / 单声道，`byteRate=44100` 正好落在 offset 28，`data` 从 44 起——与 `readWav` 的假设完全一致。
+
+语速对照：Edge 晓晓实测 4.58~4.87 字/秒，espeak 189wpm 约 4.31 字/秒，偏慢一点但同一量级。`localWpm()` 的 180 基线是合理的。
+
+### `readWav` 对异常 WAV 的行为
+
+| 样本 | 结果 |
+|---|---|
+| 22050Hz 标准 44 头，1 秒 | 1.0000 s ✓ |
+| 8000Hz，1 秒 | 1.0000 s ✓ |
+| 只有 44 字节头、无数据 | 抛 `emptyAudio` ✓（设计意图） |
+| 头部多一个 `fact` 块（56 头） | 1.0003 s，偏差 0.3 毫秒，可忽略 |
+| 16 字节截断文件 | 抛 `emptyAudio`，上层换声线重试 |
+
+### `say -v ?` 的解析
+
+用真实格式样本（含 `Grandma (Enhanced)`、`Eddy (English (US))`、带重音字符的声线名、表头行、空行）跑正则，6/6 正确。这一步只能是样本验证——`say` 实际输出无法在 Windows 上取得。
+
+### 结论与未覆盖
+
+已验证：Linux 分支的**声线解析**、**合成命令**、**WAV 格式**、**读回算法**全部符合预期，`espeak-ng` 确实能念中文。
+
+未覆盖：
+
+- mac 的 `say`：二进制不存在，只能靠参数审查（`--file-format=WAVE --data-format=LEI16@22050` 规避 AIFF，`-f -o -r -v` 均合法）
+- 真 Linux 环境：包管理器装的 espeak-ng 数据目录位置、权限、缺少音频设备的容器里行为
+- 实际听感：espeak 的中文合成是机械音，这是工具本身的水平，不是代码问题
+
+---
+
 ## 排查手法备忘
 
 **看播报到底念了什么**：插件目录下 `log.txt`（UTC 时间，本地 = UTC+8）里 `enqueue seg i/n len=… head="…" tail="…"`，`head` 就是这一段最前面的二十来字，能直接看出标点和切分对不对。
@@ -131,7 +205,8 @@ fetch('/plugins/dsh-live-speak/speak', {
 ## 悬着没做的事
 
 - 均衡器三个预设（clarity / soft / deep）只做了参数，没有真机听感验证；当前配置是全 0
-- macOS / Linux 的本地合成路径只做了静态检查和「缺二进制不崩」的兜底，没有实机验证
-- Linux 若连 `espeak-ng` 都没装，本地档会完全无声，日志有提示，但设置页还没有可见的提示文案
+- mac 的 `say` 路径仍无实机验证（二进制在 Windows 上不存在）；Linux 的 espeak 路径已用 Windows 版 espeak-ng 做过等价验证（见上节），但真 Linux 环境差异未覆盖
+- Linux 若连 `espeak-ng` 都没装，本地档会完全无声：日志有提示，但设置页没有可见文案，而且合成泵会按「不放弃」策略**一直重试**（每段退避到 15 秒一次），表现为长时间静默 + 日志刷屏。这是已知缺陷，未修——要么在 `synthesizeLocalEspeak` 里给 `ENOENT` 打不可重试标记，要么在设置页把「未检测到本机声线」显示出来
+- espeak-ng 数据目录找不到时会崩溃（`0xC0000005`）而不是报错退出，非标准安装方式可能踩到
 - `ttsEngine` 的 `auto` 兼容值仍在校验白名单里，行为等同 `edge`，没有清掉
 - 实时流式路径（门槛 140 字 + 动态软切）只用整段直喂验证过，真实流式效果没单独测
