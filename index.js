@@ -58,6 +58,11 @@ const SYNTH_RETRIES = 2
 const SYNTH_RETRY_BASE_MS = 900
 /** 不放弃重试的退避上限：一直失败也不会把等待拉到天荒地老，15 秒一次接着试。 */
 const SYNTH_RETRY_MAX_MS = 15 * 1000
+/**
+ * 两段合成之间至少留出的空隙。实测连续请求很容易被限流：直接 429，或连接建好但
+ * 八秒不回数据（限流被静默处理）。而一段要播 20 秒以上，多等这 400 毫秒听不出来。
+ */
+const SYNTH_MIN_GAP_MS = 400
 /** Edge 单次合成「多久没有数据就放弃」：正常 2.5~7 秒，卡住的是 21.5 秒，8 秒足够分辨。 */
 const EDGE_TIMEOUT_MS = 8000
 /**
@@ -124,8 +129,12 @@ const WINRT_PROBE_PS1 = path.join(LOCAL_AUDIO_DIR, 'winrt-probe.ps1')
 // "合成下一段"永远赶在"上一段播完"之前。单路顺带解决了两个老问题：
 // 并发撞 429，以及两路乱序完成时最小 id 反而最晚落地、把播放口堵住。
 const MAX_SYNTH_PARALLEL = 1
-/** 合成结果最多领先播放几段。1 = 正在播的那段之后还能备好 1 段。 */
-const MAX_SYNTH_LEAD = 2
+/**
+ * 合成结果最多领先播放几段。现在是 3：实测限流期一次失败要 8 秒超时 + 0.9 秒退避
+ * + 重新合成 5~8 秒，整段拖到 15~18 秒，而一段只播 20~27 秒。只备 2 段时余量不足一倍，
+ * 一旦重试就出现 12~18 秒断流；备 3 段约 65 秒缓冲，能盖住一次完整的重试窗口。
+ */
+const MAX_SYNTH_LEAD = 3
 /*
  * 注意：这里曾经有一个 LIVE_REPLAY_WINDOW_MS = 180_000 的时间窗，用来判断
  * 「实时路径刚刚送过东西，整段落地的消息只补尾巴」。它被删掉了，原因是
@@ -1171,6 +1180,13 @@ export function apply(ctx, config = {}) {
      * 而不是看着一张静止的卡片以为插件死了。
      */
     let synthTroubleSince = 0
+    /**
+     * 上一段合成结束的时刻（毫秒），0 表示还没合成过。
+     * 用来在两次请求之间留出 SYNTH_MIN_GAP_MS 的空隙，压低被限流的概率。
+     * 它必须活在 pump 外面：队列空了 pump 会退出，下次入队重新拉起，
+     * 间隔要跨这次拉起继续算，否则每次都能立刻发请求。
+     */
+    let lastSynthDoneAt = 0
 
     /** Edge TTS 实例懒加载：依赖缺失/网络异常都不该影响 DSH 启动。 */
     let engine = null
@@ -1914,6 +1930,12 @@ export function apply(ctx, config = {}) {
         while (jobs.length > 0 && ready.size < MAX_SYNTH_LEAD) {
           const job = jobs.shift()
           const text = job.text
+          // 两段合成之间留一点空隙：连续请求是被限流的主要原因（429 / 连上却不回话）。
+          // 播放一段要 20 秒以上，这里多等 0.4 秒听不出来，却能少掉一截重试。
+          if (lastSynthDoneAt > 0) {
+            const gap = SYNTH_MIN_GAP_MS - (Date.now() - lastSynthDoneAt)
+            if (gap > 0) await sleep(gap)
+          }
           // id 在取任务时就分配，保证 id 顺序 == 入队顺序
           const id = nextId
           nextId += 1
@@ -1946,6 +1968,7 @@ export function apply(ctx, config = {}) {
                 at: Date.now(),
               }
               ready.set(item.id, item)
+              lastSynthDoneAt = Date.now()
               lastError = ''
               synthFailCount = 0
               synthTroubleSince = 0
@@ -1956,6 +1979,8 @@ export function apply(ctx, config = {}) {
               bump()
               break
             } catch (error) {
+              // 失败的这次也算"刚合过一次"，间隔照样从这一刻起算
+              lastSynthDoneAt = Date.now()
               attempt += 1
               synthFailCount += 1
               // 第一次失败就记下起点，之后一直累积；成功一次就清零（见上面的 synth ok）。
