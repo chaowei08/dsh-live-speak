@@ -81,6 +81,27 @@ const IS_MAC = process.platform === 'darwin'
 const IS_LINUX = process.platform === 'linux'
 
 /**
+ * Windows 上调 PowerShell 一律走这个路径，不再让 execFile 按 PATH 去猜。
+ *
+ * 之前直接写 'powershell.exe'：PATH 被裁剪的环境里（精简启动器、部分终端或
+ * 自动化工具拉起的进程，PATH 里可能没有 System32）会直接 ENOENT，探测被
+ * catch 成空清单，设置页就显示「未检测到可用声线」——系统里明明装着 Huihui。
+ * 面向公众发行时这种机器不少，所以固定用绝对路径，找不到才退回按名查找。
+ */
+const POWERSHELL_EXE = (() => {
+  if (!IS_WIN) return 'powershell.exe'
+  const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows'
+  const candidates = [
+    path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+  ]
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return 'powershell.exe'
+})()
+
+/**
  * 用户没指定声线时，按这个顺序挑一条。
  *
  * 前几位是 Windows 11 的「自然语音」——晓晓、晓伊、云希这些神经语音，
@@ -1290,11 +1311,15 @@ export function apply(ctx, config = {}) {
     const probeWinrtVoices = () => new Promise((resolve) => {
       ensureWinrtScripts()
       execFile(
-        'powershell.exe',
+        POWERSHELL_EXE,
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', WINRT_PROBE_PS1],
         { timeout: 20_000, windowsHide: true },
         (error, stdout) => {
-          if (error) { resolve([]); return }
+          if (error) {
+            log(`voice probe failed: ${String(error?.message ?? error).split('\n')[0]}`)
+            resolve([])
+            return
+          }
           resolve(String(stdout || '')
             .split('\n')
             .map((line) => line.trim())
@@ -1317,11 +1342,15 @@ export function apply(ctx, config = {}) {
     ].join('; ')
     const probeSapiVoices = () => new Promise((resolve) => {
       execFile(
-        'powershell.exe',
+        POWERSHELL_EXE,
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', SAPI_PROBE_CMD],
         { timeout: 20_000, windowsHide: true },
         (error, stdout) => {
-          if (error) { resolve([]); return }
+          if (error) {
+            log(`voice probe failed: ${String(error?.message ?? error).split('\n')[0]}`)
+            resolve([])
+            return
+          }
           resolve(String(stdout || '')
             .split('\n')
             .map((line) => line.trim())
@@ -1342,7 +1371,11 @@ export function apply(ctx, config = {}) {
      */
     const probeSayVoices = () => new Promise((resolve) => {
       execFile('say', ['-v', '?'], { timeout: 15_000 }, (error, stdout) => {
-        if (error) { resolve([]); return }
+        if (error) {
+          log(`voice probe failed: ${String(error?.message ?? error).split('\n')[0]}`)
+          resolve([])
+          return
+        }
         const list = []
         for (const raw of String(stdout || '').split('\n')) {
           const hit = /^(.+?)\s+([a-zA-Z]{2}[_-][a-zA-Z]{2,3}(?:[_-][A-Za-z0-9]+)?)\s+#/u.exec(raw)
@@ -1488,7 +1521,7 @@ export function apply(ctx, config = {}) {
         return
       }
       execFile(
-        'powershell.exe',
+        POWERSHELL_EXE,
         [
           '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', WINRT_SYNTH_PS1,
           '-TextFile', txtPath, '-OutWav', wavPath, '-VoiceMatch', voice ? voice.name : '', '-Rate', rateExpr,
@@ -1746,7 +1779,7 @@ export function apply(ctx, config = {}) {
         '$s.Dispose()',
       ].join('; ')
       execFile(
-        'powershell.exe',
+        POWERSHELL_EXE,
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
         {
           timeout: 25_000,

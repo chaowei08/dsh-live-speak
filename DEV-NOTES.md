@@ -5,6 +5,55 @@
 
 ---
 
+## 2026-11-13 · 1.0.5 本地声线探测为空
+
+### 现象
+
+设置页「声线」下拉显示「未检测到可用声线」，点「重新检测」也没用；日志只有一行 `local voices: n=0 pick=none []`。系统里其实装着 Huihui / Yaoyao / Kangkang。
+
+### 根因
+
+探测和合成都是 `execFile('powershell.exe', …)`，按 PATH 找 PowerShell。这台机器上 DSH 是用 `Start-Process` 从当前 shell 拉起的，那个 shell 的 PATH 里没有 `C:\Windows\System32`，于是：
+
+```
+synth fail id=8 chars=56 attempt=16 err=spawn powershell.exe ENOENT
+```
+
+探测侧 `if (error) { resolve([]); return }` 把 ENOENT 直接吞掉，返回空清单——所以症状是「没声线」而不是「报错」。
+
+不是语音包的问题，也不是 WinRT/SAPI 的问题。用绝对路径手动跑，两条通道都正常：
+
+```
+WinRT probe → Microsoft Huihui|zh-CN / Microsoft Yaoyao|zh-CN / Microsoft Kangkang|zh-CN
+SAPI  probe → Microsoft Huihui Desktop|zh-CN / Microsoft Zira Desktop|en-US
+```
+
+### 改法
+
+新增常量 `POWERSHELL_EXE`：Windows 下先查 `${SystemRoot}\System32\WindowsPowerShell\v1.0\powershell.exe`，再查 `C:\Windows\...`，都没有才退回裸名 `powershell.exe`。四处调用点（WinRT 探测、SAPI 探测、WinRT 合成、SAPI 合成）全部改用它。
+
+不依赖 PATH 也让公众发行更稳：精简启动器、某些终端、以服务方式拉起的进程，PATH 都可能被裁剪过。
+
+### 验证
+
+重启前：`local voices: n=0 pick=none []`，`spawn powershell.exe ENOENT`。
+
+重启后：
+
+```
+local voices: n=5 pick=Microsoft Yaoyao/winrt
+  [Microsoft Huihui/winrt, Microsoft Yaoyao/winrt, Microsoft Kangkang/winrt,
+   Microsoft Huihui Desktop/sapi, Microsoft Zira Desktop/sapi]
+```
+
+本地档连续合成 4 段全部成功（41 / 96 / 120 / 14 字），`voice=Microsoft Yaoyao`。
+
+### 教训
+
+探测类代码把错误吞成空数组，等于把「环境有问题」伪装成「本来就没有」。以后这类 catch 至少要留一行日志写清失败原因。
+
+---
+
 ## 2026-11-13 · 1.0.2 标题连读修复
 
 ### 现象
