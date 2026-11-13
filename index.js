@@ -14,6 +14,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { execFile } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 /** Cordis 里这一行的名字。 */
 export const name = 'live-speak'
@@ -34,13 +36,75 @@ const MAX_READY = 60
 const READY_TTL_MS = 15 * 60 * 1000
 /** 单段合成的字数上限（Edge TTS 对长文本会明显变慢）。 */
 const MAX_SEGMENT_CHARS = 300
-/** 第一段的字数上限：短一点，让声音早点出来。 */
-const FIRST_CHUNK_CHARS = 45
-/** 合成失败的重试次数与基准等待，429 走指数退避。 */
-const SYNTH_RETRIES = 4
+/**
+ * 第一段的字数上限。
+ *
+ * 曾经是 45：为了让第一声尽早出来。但它只播 9~11 秒，几乎是全篇容错窗口最薄的地方——
+ * 实测一篇 434 字的文章，首块 45 字播 9.4 秒，第二段 228 字这次 Edge 合成用了 15 秒，
+ * 首块播完就空等 5.5 秒，开头直接断。
+ *
+ * 提到 130：第一声晚 5~6 秒出来，换来开头那段能播 26~30 秒，扛得住一次 8 秒超时加退避。
+ * 宁可晚开口，也不能开口之后就断。
+ */
+const FIRST_CHUNK_CHARS = 130
+/**
+ * 合成失败的重试次数与基准等待，429 走指数退避。
+ *
+ * 这一层是"快速自救"：单次 8 秒没数据就算超时，退避 0.9 秒再试一次。
+ * 两次都不成，就交给合成泵里那层不放弃的重试（见 pump）。
+ * 代价只在失败时：最坏 8 秒超时 + 0.9 秒退避 + 8 秒超时 = 17 秒，仍在一段 60 秒的播报窗口内。
+ */
+const SYNTH_RETRIES = 2
 const SYNTH_RETRY_BASE_MS = 900
-// 同时最多几路合成。串行时一段被 429 退避拖慢会把后面全堵住，实测出现过 8 秒空白
-const MAX_SYNTH_PARALLEL = 2
+/** 不放弃重试的退避上限：一直失败也不会把等待拉到天荒地老，15 秒一次接着试。 */
+const SYNTH_RETRY_MAX_MS = 15 * 1000
+/** Edge 单次合成「多久没有数据就放弃」：正常 2.5~7 秒，卡住的是 21.5 秒，8 秒足够分辨。 */
+const EDGE_TIMEOUT_MS = 8000
+/**
+ * 单次合成的总时长硬上限（看门狗）。
+ *
+ * EDGE_TIMEOUT_MS 只管连接/首包——实测把它压到 8 秒，真卡住的那次是 23.4 秒才由
+ * WebSocket inactivity 报错，8 秒根本没生效。合成阶段一旦卡死，没有这层就会把整篇
+ * 播报永远冻在第一段。正常合成实测 4.5~8.4 秒，20 秒留了两倍余量，超了就当失败重试。
+ */
+const SYNTH_DEADLINE_MS = 20 * 1000
+/** 本地兜底用的 Windows SAPI 声线（老式机器音，作为最后一级兜底）。 */
+const LOCAL_VOICE = 'Microsoft Yaoyao'
+/** 本地合成的 WAV 落地目录（合成完立刻读回内存并删除）。 */
+const LOCAL_AUDIO_DIR = path.join(os.homedir(), '.dsh', 'dsh-live-speak', 'local-audio')
+/** 插件自身根目录：ESM 里没有 __dirname，用 import.meta.url 反解。 */
+const PLUGIN_ROOT = path.dirname(fileURLToPath(import.meta.url))
+
+/** 三端分派：Windows 走 WinRT/SAPI，macOS 走 say，Linux 走 espeak-ng。 */
+const IS_WIN = process.platform === 'win32'
+const IS_MAC = process.platform === 'darwin'
+const IS_LINUX = process.platform === 'linux'
+
+/**
+ * 用户没指定声线时，按这个顺序挑一条。
+ *
+ * 前几位是 Windows 11 的「自然语音」——晓晓、晓伊、云希这些神经语音，
+ * 音色与 Edge 云端那批同源，但完全在本机推理、不联网、100 毫秒级出音。
+ * 它们只能通过 WinRT 的 Windows.Media.SpeechSynthesis 取到；SAPI
+ * （System.Speech）那一层看不见它们，这正是早前「本机没有晓晓」误判的来源。
+ * 后面三条是 macOS 与 Linux 的中文声线。一个都没命中时，才落到 list[0]。
+ */
+const LOCAL_VOICE_PREFER = [
+  'Xiaoxiao', 'Xiaoyi', 'Yunxi', 'Yunyang', 'Yunjian', 'Yaoyao',
+  'Tingting', 'Meijia', 'Sinji', 'Huihui', 'Kangkang',
+]
+/** 本地声线清单里，语言一律用 BCP-47 风格；这几种都算中文。 */
+const RE_ZH_LANG = /^zh|^cmn|^yue|Chinese/i
+/** WinRT 脚本落在运行时目录，随插件写出来，不塞进 npm 包体。 */
+const WINRT_SYNTH_PS1 = path.join(LOCAL_AUDIO_DIR, 'winrt-synth.ps1')
+const WINRT_PROBE_PS1 = path.join(LOCAL_AUDIO_DIR, 'winrt-probe.ps1')
+// 同一时刻只有一路合成在途，并且 ready 里最多备 2 段（1 段在播、1 段等播）。
+// 300 字一段要播约 60 秒，而合成一段只要 5~10 秒，余量六倍以上，
+// "合成下一段"永远赶在"上一段播完"之前。单路顺带解决了两个老问题：
+// 并发撞 429，以及两路乱序完成时最小 id 反而最晚落地、把播放口堵住。
+const MAX_SYNTH_PARALLEL = 1
+/** 合成结果最多领先播放几段。1 = 正在播的那段之后还能备好 1 段。 */
+const MAX_SYNTH_LEAD = 2
 /*
  * 注意：这里曾经有一个 LIVE_REPLAY_WINDOW_MS = 180_000 的时间窗，用来判断
  * 「实时路径刚刚送过东西，整段落地的消息只补尾巴」。它被删掉了，原因是
@@ -117,6 +181,27 @@ const DEFAULT_SETTINGS = {
    * 只在 dock = sidebar 时有意义，顶栏形态没有展开卡片。
    */
   dockExpanded: false,
+  /**
+   * 用哪个引擎合成。
+   * - 'edge'（默认）：只用 Edge 神经语音，音色自然。慢的时候第一句要等 4~7 秒，
+   *   个别段超时会直接跳过——不换成系统声线，保证整篇是同一个人念的。
+   * - 'local'：只用 Windows 本地声线。实测 28 字约 282ms，起播最快、长文不断流，
+   *   代价是音色是上一代机器音。
+   * - 'auto'：老配置遗留值，行为同 'edge'（不再自动降级，避免一篇里两种声音）。
+   */
+  ttsEngine: 'edge',
+  /**
+   * 本地档用哪条声线（存声线名，空字符串＝让插件按平台自动挑一条最优的）。
+   * 清单由宿主实时探测，用户装了新语音包会出现在设置页里，选谁就用谁。
+   */
+  localVoice: '',
+  /**
+   * 播放端均衡器：10 段（31 / 63 / 125 / 250 / 500 / 1k / 2k / 4k / 8k / 16k Hz），
+   * 每段增益 -12~+12 dB。
+   * 只在客户端播放链路里生效（Web Audio 的 BiquadFilter 串在 Audio 元素之后），
+   * 不改合成结果，所以拖动滑块能立刻听到变化、也不用重新合成。
+   */
+  eq: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -155,6 +240,22 @@ function normalizeSettings(raw) {
     codeQuiet: pickBool(src.codeQuiet, DEFAULT_SETTINGS.codeQuiet),
     dockExpanded: pickBool(src.dockExpanded, DEFAULT_SETTINGS.dockExpanded),
     dock: ['top', 'sidebar'].includes(src.dock) ? src.dock : DEFAULT_SETTINGS.dock,
+    ttsEngine: ['edge', 'local', 'auto'].includes(src.ttsEngine)
+      ? src.ttsEngine
+      : DEFAULT_SETTINGS.ttsEngine,
+    // 本地声线名：不在这里对照清单校验——清单是运行时探测的，
+    // 用户选的那条万一被卸载，取值时再回落到自动挑选，不让配置把插件弄哑。
+    localVoice: typeof src.localVoice === 'string' ? src.localVoice.trim().slice(0, 120) : '',
+    // 均衡器：固定 10 段，非数字回落 0，越界夹到 ±12 dB
+    eq: (() => {
+      const arr = Array.isArray(src.eq) ? src.eq : []
+      const out = []
+      for (let i = 0; i < 10; i += 1) {
+        const n = Number(arr[i])
+        out.push(Number.isFinite(n) ? Math.max(-12, Math.min(12, Math.round(n * 10) / 10)) : 0)
+      }
+      return out
+    })(),
   }
 }
 
@@ -284,6 +385,13 @@ function fileKindLabel(file) {
  * 把模型输出的 Markdown 洗成"能念的普通话"：
  * 代码块、表格、URL、标记符号都不该被念出来。
  */
+/**
+ * 标题行没写成 Markdown 时（模型常用加粗或直接独占一行）的补救：逐行补标点那一步，
+ * 遇到"短、没有逗号、也没有句末标点"的一行，补省略号而不是句号。
+ * 句号的停顿只有 200 毫秒，听起来仍是「帘卷西风济南的趵突泉边」；省略号才够长。
+ */
+const TITLE_LINE_MAX = 20
+
 function cleanForSpeech(raw) {
   let text = String(raw ?? '')
   if (text === '') return ''
@@ -342,7 +450,9 @@ function cleanForSpeech(raw) {
   // 没写闭合围栏的代码块：从围栏开头整段丢掉（剩下的都是代码，念出来全是花括号分号）
   text = text.replace(/```[\s\S]*$/gu, '\n')
   text = text.replace(/`([^`]*)`/gu, '$1')
-  text = text.replace(/^\s{0,3}#{1,6}\s+(.+)$/gmu, (match, title) => (/[。！？!?：:,，]$/u.test(title) ? title : `${title}。`))
+  // 标题行不补句号，改补省略号：句号只给 200 毫秒，听起来还是"帘卷西风济南的趵突泉边"一句；
+  // 省略号的停顿明显长一截，标题和正文才听得出是两件事。
+  text = text.replace(/^\s{0,3}#{1,6}\s+(.+)$/gmu, (match, title) => (/[。！？!?：:,，…]$/u.test(title) ? title : `${title}……`))
   text = text.replace(/^\s{0,3}>\s?/gmu, '')
   text = text.replace(/^\s{0,3}[-*+]\s+/gmu, '')
   text = text.replace(/^\s{0,3}\d+[.)]\s+/gmu, '')
@@ -367,7 +477,12 @@ function cleanForSpeech(raw) {
     // 没被围栏包住、直接摊在正文里的代码行：念出来是「padding 10 px」「background color」
     .filter((line) => line !== '' && !looksLikeCodeLine(line))
   text = lines
-    .map((line) => (/[。！？!?…；;：:，,]$/u.test(line) ? line : `${line}。`))
+    .map((line) => {
+      if (/[。！？!?…；;：:，,]$/u.test(line)) return line
+      // 短、没逗号的一行，基本就是没写成 Markdown 的小标题：补省略号，让停顿明显
+      if (line.length <= TITLE_LINE_MAX && !/[，,：:；;]/u.test(line)) return `${line}……`
+      return `${line}。`
+    })
     .join('\n')
   return text.trim()
 }
@@ -788,6 +903,10 @@ function chunkText(text, targetChars, firstChunkChars = 0) {
   for (const sentence of sentences) {
     const pieces = sentence.length > limit * 1.5 ? splitLongSentence(sentence, limit) : [sentence]
     for (const piece of pieces) {
+      // 标题行到这里已经是普通句子了（cleanForSpeech 在它后面补了省略号）。
+      // 不能让它单独成一段：4 个字的标题只播 1.5 秒，而下一段 76 字要合成 8 秒，
+      // 播完标题就开始空等——实测就是 5~7 秒的空白，比连读难听得多。
+      // 停顿由省略号给，节奏还由 300 字的大块保证。
       if (current !== '' && current.length + piece.length > limit) {
         chunks.push(current)
         current = ''
@@ -816,14 +935,12 @@ function chunkText(text, targetChars, firstChunkChars = 0) {
   // 首段单独缩短：第一段越快合成完，用户越早听到声音
   if (firstChunkChars > 0 && merged.length > 0 && merged[0].length > firstChunkChars) {
     const head = splitLongSentence(merged[0], Math.max(20, firstChunkChars))
-    // 尾部碎片（"等得久了。"这种十几字）并回前一段：
-    // 否则会多出一个 13 字的独立段，既多一次合成，又多一次启停。
-    const fixed = []
-    for (const piece of head) {
-      if (fixed.length > 0 && piece.length < 15) fixed[fixed.length - 1] += piece
-      else fixed.push(piece)
-    }
-    merged.splice(0, 1, ...fixed)
+    // 只拿第一小段当前置首块，剩下的整段并回第二块。
+    // 以前是把它拆成五六段，结果每一小段都要单独去服务端排一次队：
+    // 首句没更快，反而多了五次超时机会（日志里一篇 13 段有 6 段是这种碎片）。
+    const lead = head[0]
+    const rest = head.slice(1).join('')
+    merged.splice(0, 1, ...(rest.trim() === '' ? [lead] : [lead, rest]));
   }
   return merged
 }
@@ -1095,23 +1212,612 @@ export function apply(ctx, config = {}) {
       return chosen
     }
 
-    /** 调用 Edge 合成一段；429/网络错走指数退避，别一段就把整轮播报拖死。 */
+    const WINRT_SYNTH_SCRIPT = [
+      'param([string]$TextFile,[string]$OutWav,[string]$VoiceMatch,[string]$Rate)',
+      'Add-Type -AssemblyName System.Runtime.WindowsRuntime | Out-Null',
+      "$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]",
+      'function Await($task) {',
+      '  $net = $asTaskGeneric.MakeGenericMethod([Windows.Media.SpeechSynthesis.SpeechSynthesisStream]).Invoke($null, @($task))',
+      '  $net.Wait(-1) | Out-Null',
+      '  $net.Result',
+      '}',
+      '[void][Windows.Media.SpeechSynthesis.SpeechSynthesizer,Windows.Media.SpeechSynthesis,ContentType=WindowsRuntime]',
+      '$synth = New-Object Windows.Media.SpeechSynthesis.SpeechSynthesizer',
+      '$voices = [Windows.Media.SpeechSynthesis.SpeechSynthesizer]::AllVoices',
+      '$target = $null',
+      'if ($VoiceMatch) { $target = $voices | Where-Object { $_.DisplayName -like "*$VoiceMatch*" } | Select-Object -First 1 }',
+      "if ($null -eq $target) { $target = $voices | Where-Object { $_.Language -like 'zh*' } | Select-Object -First 1 }",
+      "if ($null -eq $target) { throw 'NO_LOCAL_VOICE' }",
+      '$synth.Voice = $target',
+      '$body = Get-Content -LiteralPath $TextFile -Raw -Encoding utf8',
+      "if (-not $body) { throw 'EMPTY_TEXT' }",
+      '$escaped = [System.Security.SecurityElement]::Escape($body)',
+      '$ssml = \'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN"><prosody rate="\' + $Rate + \'">\' + $escaped + \'</prosody></speak>\'',
+      'try { $stream = Await ($synth.SynthesizeSsmlToStreamAsync($ssml)) }',
+      'catch { $stream = Await ($synth.SynthesizeTextToStreamAsync($body)) }',
+      '$src = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($stream)',
+      '$fs = [System.IO.File]::Create($OutWav)',
+      '$src.CopyTo($fs)',
+      '$fs.Close()',
+      '$src.Close()',
+      '$synth.Dispose()',
+      "'VOICE=' + $target.DisplayName",
+    ].join('\r\n')
+
+    const WINRT_PROBE_SCRIPT = [
+      '[void][Windows.Media.SpeechSynthesis.SpeechSynthesizer,Windows.Media.SpeechSynthesis,ContentType=WindowsRuntime]',
+      '$voices = [Windows.Media.SpeechSynthesis.SpeechSynthesizer]::AllVoices',
+      "foreach ($v in $voices) { $v.DisplayName + '|' + $v.Language + '|' + $v.Id }",
+    ].join('\r\n')
+
+    /**
+     * 两个脚本每次都按内容比对写一遍，内容没变就不落盘。
+     * 放在运行时目录而不是插件目录，是为了 npm 包里不带可变文件。
+     */
+    const ensureWinrtScripts = () => {
+      try {
+        fs.mkdirSync(LOCAL_AUDIO_DIR, { recursive: true })
+        const writeIfChanged = (target, content) => {
+          let previous = ''
+          try { previous = fs.readFileSync(target, 'utf8') } catch { /* 没有就当空 */ }
+          if (previous !== content) fs.writeFileSync(target, content, 'utf8')
+        }
+        writeIfChanged(WINRT_SYNTH_PS1, WINRT_SYNTH_SCRIPT)
+        writeIfChanged(WINRT_PROBE_PS1, WINRT_PROBE_SCRIPT)
+      } catch { /* 写不进去就让上层回落到 SAPI */ }
+    }
+
+    // ── 本机声线探测（三端统一） ──────────────────────────────
+    // 统一结构 { name, id, lang, engine }：
+    //   engine = winrt / sapi / say / espeak —— 合成时按它分派到对应后端
+    //   id     = 该后端内部指定声线用的值（Windows 用声线名，say/espeak 也用名字）
+    // 清单缓存 5 分钟；设置页点「重新检测」会强制清缓存立刻重探。
+
+    /** Windows：WinRT 那一层。自然语音（晓晓这类）只在这里，SAPI 看不见。 */
+    const probeWinrtVoices = () => new Promise((resolve) => {
+      ensureWinrtScripts()
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', WINRT_PROBE_PS1],
+        { timeout: 20_000, windowsHide: true },
+        (error, stdout) => {
+          if (error) { resolve([]); return }
+          resolve(String(stdout || '')
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => {
+              const [name, lang, id] = line.split('|')
+              return { name: name || '', id: id || name || '', lang: lang || '', engine: 'winrt' }
+            })
+            .filter((voice) => voice.name !== ''))
+        },
+      )
+    })
+
+    /** Windows：SAPI 那一层。老式桌面声线（Huihui / Kangkang / Yaoyao）在这里。 */
+    const SAPI_PROBE_CMD = [
+      'Add-Type -AssemblyName System.Speech',
+      '$s = New-Object System.Speech.Synthesis.SpeechSynthesizer',
+      'foreach ($v in $s.GetInstalledVoices()) { if ($v.Enabled) { $i = $v.VoiceInfo; $i.Name + "|" + $i.Culture.Name } }',
+      '$s.Dispose()',
+    ].join('; ')
+    const probeSapiVoices = () => new Promise((resolve) => {
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', SAPI_PROBE_CMD],
+        { timeout: 20_000, windowsHide: true },
+        (error, stdout) => {
+          if (error) { resolve([]); return }
+          resolve(String(stdout || '')
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => {
+              const [name, lang] = line.split('|')
+              return { name: name || '', id: name || '', lang: lang || '', engine: 'sapi' }
+            })
+            .filter((voice) => voice.name !== ''))
+        },
+      )
+    })
+
+    /**
+     * macOS：`say -v ?` 的固定列输出，形如
+     *   Tingting            zh_CN    # 你好，我叫Tingting。
+     * 声线名可能带空格，所以用「空白 + 语言标签 + #」从右侧圈定，避免按列硬切。
+     */
+    const probeSayVoices = () => new Promise((resolve) => {
+      execFile('say', ['-v', '?'], { timeout: 15_000 }, (error, stdout) => {
+        if (error) { resolve([]); return }
+        const list = []
+        for (const raw of String(stdout || '').split('\n')) {
+          const hit = /^(.+?)\s+([a-zA-Z]{2}[_-][a-zA-Z]{2,3}(?:[_-][A-Za-z0-9]+)?)\s+#/u.exec(raw)
+          if (hit === null) continue
+          const name = hit[1].trim()
+          if (name === '') continue
+          list.push({ name, id: name, lang: hit[2], engine: 'say' })
+        }
+        resolve(list)
+      })
+    })
+
+    /**
+     * Linux：espeak-ng（或老版 espeak）的 --voices 表格，第 2 列语言代码、第 4 列声线名。
+     * 优先 espeak-ng，没装再退回 espeak；两个都探不到就返回空清单。
+     */
+    let espeakBinary = ''
+    const probeEspeakVoices = () => new Promise((resolve) => {
+      const tryBin = (bin, next) => {
+        execFile(bin, ['--voices'], { timeout: 15_000 }, (error, stdout) => {
+          if (error) { next(); return }
+          espeakBinary = bin
+          const list = []
+          for (const raw of String(stdout || '').split('\n')) {
+            const cols = raw.trim().split(/\s+/u)
+            // 表头 "Pty Language Age/Gender VoiceName File ..." 第一列不是数字，直接跳过
+            if (cols.length < 4 || !/^\d+$/u.test(cols[0])) continue
+            // espeak 的 VoiceName 列本身带空格（如 "Chinese (Mandarin)"），
+            // 用语言代码当 id（espeak-ng -v cmn 认这个），显示名把两段拼起来便于辨认
+            list.push({ name: `${cols[1]} ${cols[3]}`.trim(), id: cols[1], lang: cols[1], engine: 'espeak' })
+          }
+          resolve(list)
+        })
+      }
+      // 两个都没有时留一条明确日志：Linux 本地档没声音就是这个原因，别让人猜
+      tryBin('espeak-ng', () => tryBin('espeak', () => {
+        log('本地语音不可用：本机既没有 espeak-ng 也没有 espeak，装任意一个即可')
+        resolve([])
+      }))
+    })
+
+    /** 按名字去重：同名保留先出现的（Windows 上 WinRT 排在 SAPI 前面，那一份音质更好）。 */
+    const dedupeVoices = (list) => {
+      const seen = new Set()
+      const out = []
+      for (const voice of list) {
+        const key = String(voice.name || '').toLowerCase()
+        if (key === '' || seen.has(key)) continue
+        seen.add(key)
+        out.push(voice)
+      }
+      return out
+    }
+
+    const probeLocalVoicesNow = () => {
+      if (IS_MAC) return probeSayVoices()
+      if (IS_WIN) {
+        return Promise.all([probeWinrtVoices(), probeSapiVoices()])
+          .then(([winrt, sapi]) => dedupeVoices([...winrt, ...sapi]))
+      }
+      return probeEspeakVoices()
+    }
+
+    /** 本机声线清单，缓存 5 分钟（中途装语音包时点「重新检测」可立刻刷新）。 */
+    let localVoicesCache = null
+    /** 给 /state 与设置页用的快照：挂载后异步探一次。 */
+    let localVoicesSnapshot = []
+    let localVoiceSnapshot = null
+    const probeLocalVoices = () => new Promise((resolve) => {
+      const now = Date.now()
+      if (localVoicesCache && now - localVoicesCache.at < 5 * 60 * 1000) {
+        resolve(localVoicesCache.list)
+        return
+      }
+      probeLocalVoicesNow()
+        .then((list) => {
+          localVoicesCache = { at: now, list }
+          resolve(list)
+        })
+        .catch(() => resolve([]))
+    })
+
+    /**
+     * 挑一条要用的本机声线：用户选的那条优先；它被卸载了就按优选顺序重挑。
+     * 顺序是「偏好表命中 → 中文声线 → 清单第一条」，保证总有声音，不会因为
+     * 用户选过的声线消失而变成哑巴。
+     */
+    const pickLocalVoice = (list) => {
+      if (!Array.isArray(list) || list.length === 0) return null
+      const want = String(settings.localVoice || '')
+      if (want !== '') {
+        const hit = list.find((voice) => voice.name === want || voice.id === want)
+        if (hit) return hit
+      }
+      for (const key of LOCAL_VOICE_PREFER) {
+        const hit = list.find((voice) => String(voice.name).toLowerCase().includes(key.toLowerCase()))
+        if (hit) return hit
+      }
+      const zhHit = list.find((voice) => RE_ZH_LANG.test(String(voice.lang || '')))
+      return zhHit || list[0]
+    }
+
+    /**
+     * 本机有没有「自然语音」（晓晓这类神经语音）。
+     * Windows 上只有 Huihui/Kangkang/Yaoyao 这几个老式机器音时返回 false。
+     */
+    const hasNaturalLocalVoice = (list) => list.some((voice) => /Xiaoxiao|Xiaoyi|Yunxi|Yunyang|Yunjian/i.test(voice.name))
+
+    /** 挂载后探一次本机语音，结果同时供 /state 与设置页使用。失败不重试、不影响播报。 */
+    const refreshLocalVoices = (force = false) => {
+      if (force) localVoicesCache = null
+      return probeLocalVoices()
+        .then((list) => {
+          localVoicesSnapshot = list
+          localVoiceSnapshot = pickLocalVoice(list)
+          // 这条日志是「本机到底探到几条声线、走哪个后端」的唯一现场证据
+          log(`local voices: n=${list.length} pick=${localVoiceSnapshot ? `${localVoiceSnapshot.name}/${localVoiceSnapshot.engine}` : 'none'} [${list.map((voice) => `${voice.name}/${voice.engine}`).join(', ')}]`)
+          bump()
+          return list
+        })
+        .catch(() => localVoicesSnapshot)
+    }
+
+    /**
+     * WinRT 本地合成。自然语音（晓晓这类）只挂在 Windows.Media.SpeechSynthesis 这一层，
+     * SAPI 的 GetInstalledVoices 看不见它们，所以这两条路要分开走。
+     */
+    const synthesizeLocalWinRT = (text, voice) => new Promise((resolve, reject) => {
+      const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const txtPath = path.join(LOCAL_AUDIO_DIR, `winrt-${stamp}.txt`)
+      const wavPath = path.join(LOCAL_AUDIO_DIR, `winrt-${stamp}.wav`)
+      const edgeRate = Number(String(settings.rate || '0').replace('%', '')) || 0
+      const rateExpr = `${edgeRate > 0 ? '+' : ''}${Math.max(-50, Math.min(50, edgeRate))}%`
+      const cleanup = () => {
+        try { fs.unlinkSync(txtPath) } catch { /* 已经不在就算了 */ }
+        try { fs.unlinkSync(wavPath) } catch { /* 同上 */ }
+      }
+      try {
+        ensureWinrtScripts()
+        fs.writeFileSync(txtPath, text, 'utf8')
+      } catch (error) {
+        reject(error)
+        return
+      }
+      execFile(
+        'powershell.exe',
+        [
+          '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', WINRT_SYNTH_PS1,
+          '-TextFile', txtPath, '-OutWav', wavPath, '-VoiceMatch', voice ? voice.name : '', '-Rate', rateExpr,
+        ],
+        { timeout: 25_000, windowsHide: true },
+        (error) => {
+          if (error) {
+            cleanup()
+            reject(error)
+            return
+          }
+          try {
+            // 读回 + 校验统一走 readWav：空音频（只有文件头）会在那里抛 emptyAudio，
+            // 上层据此换一条能念中文的声线，绝不把 0 秒的段当成功
+            const { buffer, duration } = readWav(wavPath)
+            cleanup()
+            resolve({
+              audio: buffer,
+              duration,
+              sentenceBoundaries: [],
+              mime: 'audio/wav',
+              voiceName: voice ? voice.name : '',
+            })
+          } catch (readError) {
+            cleanup()
+            reject(readError)
+          }
+        },
+      )
+    })
+
+    /**
+     * 语速换算：Edge 用百分比，say / espeak 用「词/分钟」。
+     * 基线 180，'+5%' → 189，'-30%' → 126，夹在 80~420 之间防止离谱值。
+     */
+    const localWpm = () => {
+      const edgeRate = Number(String(settings.rate || '0').replace('%', '')) || 0
+      return Math.max(80, Math.min(420, Math.round(180 * (1 + edgeRate / 100))))
+    }
+
+    /**
+     * 读回后端刚写出的 WAV：offset 28 是 byteRate，data 从 44 起，三端共用这一套算法。
+     * 只有一个文件头、没有音频数据时抛 emptyAudio —— 纯英文声线念中文就会这样，
+     * 上层据此换一条中文声线重来，绝不静默丢一段。
+     */
+    const readWav = (wavPath) => {
+      const buffer = fs.readFileSync(wavPath)
+      const byteRate = buffer.length >= 44 ? buffer.readUInt32LE(28) : 0
+      const duration = byteRate > 0 ? Math.max(0, buffer.length - 44) / byteRate : 0
+      if (duration <= 0.05) {
+        const error = new Error(`synthesis produced empty audio (bytes=${buffer.length})`)
+        error.emptyAudio = true
+        throw error
+      }
+      return { buffer, duration }
+    }
+
+    /**
+     * macOS：用系统自带的 say。
+     *
+     * 文本走 -f 从文件读——命令行里的中文引号和换行会被切碎。
+     * 输出显式指定 RIFF WAVE + 16bit PCM：say 默认写 AIFF，浏览器 Audio 播不了。
+     */
+    const synthesizeLocalSay = (text, voice) => new Promise((resolve, reject) => {
+      const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const txtPath = path.join(LOCAL_AUDIO_DIR, `say-${stamp}.txt`)
+      const wavPath = path.join(LOCAL_AUDIO_DIR, `say-${stamp}.wav`)
+      const cleanup = () => {
+        try { fs.unlinkSync(txtPath) } catch { /* 已经不在就算了 */ }
+        try { fs.unlinkSync(wavPath) } catch { /* 同上 */ }
+      }
+      try {
+        fs.mkdirSync(LOCAL_AUDIO_DIR, { recursive: true })
+        fs.writeFileSync(txtPath, text, 'utf8')
+      } catch (error) {
+        reject(error)
+        return
+      }
+      const args = []
+      // 没选中声线就不传 -v，交给系统默认，别把空字符串塞进参数
+      if (voice && voice.name) args.push('-v', voice.name)
+      args.push(
+        '-r', String(localWpm()),
+        '--file-format=WAVE', '--data-format=LEI16@22050',
+        '-f', txtPath, '-o', wavPath,
+      )
+      execFile('say', args, { timeout: 25_000 }, (error) => {
+        if (error) {
+          cleanup()
+          reject(error)
+          return
+        }
+        try {
+          const { buffer, duration } = readWav(wavPath)
+          cleanup()
+          resolve({
+            audio: buffer,
+            duration,
+            sentenceBoundaries: [],
+            mime: 'audio/wav',
+            voiceName: voice && voice.name ? voice.name : 'say',
+          })
+        } catch (readError) {
+          cleanup()
+          reject(readError)
+        }
+      })
+    })
+
+    /**
+     * Linux：用 espeak-ng（没装就退回老版 espeak）。
+     *
+     * -v 认语言代码（cmn / zh），-s 是词/分钟，-w 直接写 WAV，-f 从文件读文本。
+     * 音质是这批里最机械的，但它是唯一「装完就有声音、完全离线」的 Linux 方案。
+     */
+    const synthesizeLocalEspeak = (text, voice) => new Promise((resolve, reject) => {
+      const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const txtPath = path.join(LOCAL_AUDIO_DIR, `esp-${stamp}.txt`)
+      const wavPath = path.join(LOCAL_AUDIO_DIR, `esp-${stamp}.wav`)
+      const cleanup = () => {
+        try { fs.unlinkSync(txtPath) } catch { /* 已经不在就算了 */ }
+        try { fs.unlinkSync(wavPath) } catch { /* 同上 */ }
+      }
+      try {
+        fs.mkdirSync(LOCAL_AUDIO_DIR, { recursive: true })
+        fs.writeFileSync(txtPath, text, 'utf8')
+      } catch (error) {
+        reject(error)
+        return
+      }
+      const bin = espeakBinary || 'espeak-ng'
+      const args = ['-w', wavPath, '-f', txtPath, '-s', String(localWpm())]
+      if (voice && voice.id) args.push('-v', voice.id)
+      execFile(bin, args, { timeout: 25_000 }, (error) => {
+        if (error) {
+          cleanup()
+          reject(error)
+          return
+        }
+        try {
+          const { buffer, duration } = readWav(wavPath)
+          cleanup()
+          resolve({
+            audio: buffer,
+            duration,
+            sentenceBoundaries: [],
+            mime: 'audio/wav',
+            voiceName: voice && voice.id ? voice.id : bin,
+          })
+        } catch (readError) {
+          cleanup()
+          reject(readError)
+        }
+      })
+    })
+
+    /**
+     * 本地合成总入口，按平台 + 声线所选后端分派。
+     *
+     * Windows：用户选的若是 SAPI 声线就直接走 SAPI；否则先试 WinRT（自然语音音质最好），
+     *          失败再落 SAPI，两级都留日志——那是「这台机器实际走哪条路」的唯一证据。
+     * macOS：say 一条路。Linux：espeak-ng 一条路。
+     * 三端都不联网、不注册、不装运行库。
+     */
+    const synthesizeLocal = async (text) => {
+      // 首次就念、清单还没探到：补探一次（用户可能刚装完语音包）
+      if (localVoicesSnapshot.length === 0) {
+        await refreshLocalVoices().catch(() => {})
+      }
+      const voice = pickLocalVoice(localVoicesSnapshot)
+
+      const run = async (target) => {
+        if (IS_MAC) return synthesizeLocalSay(text, target)
+        if (!IS_WIN) return synthesizeLocalEspeak(text, target)
+        if (target && target.engine === 'sapi') {
+          return synthesizeLocalSapi(text, target.name)
+        }
+        try {
+          return await synthesizeLocalWinRT(text, target)
+        } catch (error) {
+          if (error?.emptyAudio) throw error
+          log(`winrt→sapi fallback chars=${text.length} err=${String(error?.message ?? error).split('\n')[0]}`)
+          return synthesizeLocalSapi(text, target ? target.name : LOCAL_VOICE)
+        }
+      }
+
+      try {
+        return await run(voice)
+      } catch (error) {
+        // 空音频：多半是用户选了一条纯英文声线去念中文（SAPI 会吐一个只有文件头的空 WAV）。
+        // 不静默丢这一段，换清单里的中文声线再合一遍；还是空就抛给合成泵去重试。
+        if (error?.emptyAudio) {
+          const zhVoice = localVoicesSnapshot.find((item) => RE_ZH_LANG.test(String(item.lang || '')))
+          if (zhVoice && (voice === null || zhVoice.name !== voice.name)) {
+            log(`本机声线 ${voice ? voice.name : '默认'} 念中文出空音频，改用 ${zhVoice.name} 重试`)
+            return run(zhVoice)
+          }
+          log(`本机声线 ${voice ? voice.name : '默认'} 念中文出空音频，且清单里没有别的中文声线`)
+        }
+        throw error
+      }
+    }
+
+    /**
+     * 本地兜底合成：调 Windows 自带的 System.Speech 写一个 WAV 出来，再读回内存。
+     *
+     * 为什么需要它：Edge 那边每段固定要 2.5~7 秒，还有约三分之一概率卡到 21.5 秒超时。
+     * 实时路径虽然能把增量文本早早切好送过来，但全都堵在合成这一步上 ——
+     * 实测用户按回车到听见第一声要 43~105 秒。本地这一段实测 28 字 282ms，
+     * 是让「边生成边念」真正能听见的唯一办法。
+     *
+     * 代价是音质：Microsoft Huihui 是上一代机器合成，没有 Edge 神经声线自然。
+     */
+    const synthesizeLocalSapi = (text, voiceName = LOCAL_VOICE) => new Promise((resolve, reject) => {
+      const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const wantVoice = String(voiceName || LOCAL_VOICE).trim() || LOCAL_VOICE
+      let txtPath = ''
+      let wavPath = ''
+      try {
+        fs.mkdirSync(LOCAL_AUDIO_DIR, { recursive: true })
+        txtPath = path.join(LOCAL_AUDIO_DIR, `sapi-${stamp}.txt`)
+        wavPath = path.join(LOCAL_AUDIO_DIR, `sapi-${stamp}.wav`)
+        // 文本走文件传，别塞进命令行：中文引号和换行会把参数切碎
+        fs.writeFileSync(txtPath, text, 'utf8')
+      } catch (error) {
+        reject(error)
+        return
+      }
+      // SAPI 的 Rate 是 -10~10 整数；Edge 那边 '+10%' 大约相当于 Rate=2
+      const edgeRate = Number(String(settings.rate || '0').replace('%', '')) || 0
+      const sapiRate = Math.max(-10, Math.min(10, Math.round(edgeRate / 5)))
+      const script = [
+        'Add-Type -AssemblyName System.Speech',
+        '$s = New-Object System.Speech.Synthesis.SpeechSynthesizer',
+        // 声线名走环境变量：用户装的声线可能带单引号，拼进脚本会把命令切断。
+        // 名字不存在（被卸载了）也不让它抛：包一层 try，退回系统默认声线照样出声。
+        'try { $s.SelectVoice($env:LS_VOICE) } catch { }',
+        `$s.Rate = ${sapiRate}`,
+        '$s.SetOutputToWaveFile($env:LS_WAV)',
+        '$body = Get-Content -LiteralPath $env:LS_TXT -Raw -Encoding utf8',
+        'if ($body) { $s.Speak($body) }',
+        '$s.Dispose()',
+      ].join('; ')
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        {
+          timeout: 25_000,
+          windowsHide: true,
+          env: { ...process.env, LS_WAV: wavPath, LS_TXT: txtPath, LS_VOICE: wantVoice },
+        },
+        (error) => {
+          const cleanup = () => {
+            try { fs.unlinkSync(txtPath) } catch { /* 已经不在就算了 */ }
+            try { fs.unlinkSync(wavPath) } catch { /* 同上 */ }
+          }
+          if (error) {
+            cleanup()
+            reject(error)
+            return
+          }
+          try {
+            // readWav 在 data 段为空（例如纯英文声线念中文只吐 46 字节文件头）时抛
+            // emptyAudio，交给 synthesizeLocal 换中文声线重来，不静默丢这一整段
+            const { buffer, duration } = readWav(wavPath)
+            cleanup()
+            // 本地出的是 WAV，传回去时要让 /audio 路由按真实类型下发，
+            // 否则浏览器拿到 Content-Type=audio/mpeg 的 WAV 有可能直接拒绝播
+            resolve({ audio: buffer, duration, sentenceBoundaries: [], mime: 'audio/wav', voiceName: wantVoice })
+          } catch (readError) {
+            cleanup()
+            reject(readError)
+          }
+        },
+      )
+    })
+
+    /**
+     * 调用 Edge 合成一段；429/网络错走指数退避，别一段就把整轮播报拖死。
+     * ttsEngine='local' 时整段走本地；其余（'edge' / 老配置的 'auto'）只走 Edge，
+     * 失败就抛给合成泵——那一层会一直重试到成功，绝不丢这一段。
+     */
+    /**
+     * 给一次合成套一条总时长硬上限。
+     *
+     * Edge 那个 timeout 只覆盖连接和首包，合成阶段卡住它管不了；超时就把这次当失败
+     * 抛出去，由上面那两层重试接手。底层 socket 收不到取消信号，所以超时后调用方
+     * 会把共享实例丢掉（engine = null），下一次重试新建一条干净的连接。
+     */
+    const withDeadline = (promise, ms) => new Promise((resolve, reject) => {
+      let settled = false
+      const timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        const error = new Error(`合成总时长超限 watchdog timeout ${ms}ms`)
+        error.deadline = true
+        reject(error)
+      }, ms)
+      promise.then(
+        (value) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          resolve(value)
+        },
+        (error) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          reject(error)
+        },
+      )
+    })
+
     const synthesize = async (text, voice) => {
+      if (settings.ttsEngine === 'local') return synthesizeLocal(text)
+      // 线上档就是纯线上：失败不换成本地声线。宁可这一段跳过去，
+      // 也不能让同一篇里一半晓晓一半瑶瑶——那比少一句话难听得多。
       await ensureEngine()
       let last
       for (let attempt = 0; attempt < SYNTH_RETRIES; attempt += 1) {
         try {
-          const result = await tts().generate(text, voice, {
-            rate: settings.rate,
-            volume: settings.volume,
-            outputFormat: engineModule.Constants.OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3,
-          })
+          const result = await withDeadline(
+            tts().generate(text, voice, {
+              rate: settings.rate,
+              volume: settings.volume,
+              outputFormat: engineModule.Constants.OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3,
+              // 卡住的那次是 21.5 秒的 socket 超时；8 秒还没数据就放弃，交给上面的重试
+              timeout: EDGE_TIMEOUT_MS,
+            }),
+            SYNTH_DEADLINE_MS,
+          )
           if (!result?.audio || result.audio.length === 0) throw new Error('合成结果为空')
           return result
         } catch (error) {
           last = error
+          // 卡死的那条 socket 已经不可信，丢掉实例让下一次重试重连
+          if (error?.deadline) engine = null
           const status = Number(error?.status ?? 0)
           const message = String(error?.message ?? error)
+          // 内层自救也要留痕：否则日志上只会看到一段莫名多等了二十秒
+          log(`synth inner fail chars=${text.length} attempt=${attempt + 1} deadline=${error?.deadline === true} err=${message}`)
           const retryable = status === 429
             || status === 503
             || status === 0
@@ -1124,56 +1830,78 @@ export function apply(ctx, config = {}) {
     }
 
     /**
-     * 合成泵：两路流水线。
+     * 合成泵：单路串行 + 只领先播报一段。
      *
-     * 原来是一段接一段地串行合成，好处是完全不触发语音服务限流，坏处是——
-     * 只要有一段碰上 429 退避或握手变慢（实测有 20 秒的），后面所有段都跟着排队，
-     * 播放端就听到几秒甚至八秒的空白。两路可以让"慢的那一段"不再堵住别的段。
-     * 只开 MAX_SYNTH_PARALLEL = 2：再多，限流概率明显上升。
+     * 这里曾经是两路并行、一次性把整篇全合成放到 ready 里。它的问题不在"合成不够快"，
+     * 而在顺序：播放必须按 id 从小到大取，两路乱序完成时最小的 id 常常最后一个落地，
+     * 后面早就合好的段也只能干等（日志实测干等 5.4 秒）。
+     *
+     * 现在改成"边播边合下一段"的流水线：合成第 n 段成功后立刻接着合第 n+1 段，
+     * 但 ready 里最多留 MAX_SYNTH_LEAD 段。300 字播一分钟、合成只要 5~10 秒，
+     * 余量足够，所以既不会断，也不会并发去撞 429。
      */
     const pump = async () => {
       if (working) return
       working = true
       bump()
       const worker = async () => {
-        while (jobs.length > 0) {
+        // 只领先 MAX_SYNTH_LEAD 段：够下一段马上接上就行，再多只是白占内存。
+        // 队列没被推满时会在这里停下，等客户端播完一段、/consume 回掉一段，再继续。
+        while (jobs.length > 0 && ready.size < MAX_SYNTH_LEAD) {
           const job = jobs.shift()
           const text = job.text
-          // id 在取任务时就分配，保证 id 顺序 == 入队顺序（并发完成顺序可能乱）
+          // id 在取任务时就分配，保证 id 顺序 == 入队顺序
           const id = nextId
           nextId += 1
-          try {
-            const voice = resolveVoiceFor(text)
-            const result = await synthesize(text, voice)
-            const item = {
-              id,
-              text,
-              index: job.index,
-              total: job.total,
-              chars: text.length,
-              voice,
-              // preview 是给客户端卡片当歌词看的，42 字太短会半句截断；
-              // 放宽到 120 字，即使用 3 行小字号也放得下，整段播报不会被省略号切掉
-              preview: text.length > 120 ? `${text.slice(0, 120)}…` : text,
-              // LRC 时间轴：块内每句的起点/时长（秒），客户端按 currentTime 找当前句
-              cues: buildCues(job.lines || splitLyricLines(text), result),
-              buffer: Buffer.isBuffer(result.audio) ? result.audio : Buffer.from(result.audio),
-              duration: Number(result.duration) || 0,
-              chime: job.chime === true,
-              at: Date.now(),
+          // 内容完整性优先：合不出来就一直等它合出来，绝不丢一段。
+          // 唯一的中断条件是新一轮请求把 epoch 推走——那时整篇本来就不该再念了。
+          const myEpoch = epoch
+          let attempt = 0
+          while (true) {
+            if (epoch !== myEpoch) break
+            try {
+              const voice = resolveVoiceFor(text)
+              const result = await synthesize(text, voice)
+              const item = {
+                id,
+                text,
+                index: job.index,
+                total: job.total,
+                chars: text.length,
+                voice,
+                // preview 是给客户端卡片当歌词看的，42 字太短会半句截断；
+                // 放宽到 120 字，即使用 3 行小字号也放得下，整段播报不会被省略号切掉
+                preview: text.length > 120 ? `${text.slice(0, 120)}…` : text,
+                // LRC 时间轴：块内每句的起点/时长（秒），客户端按 currentTime 找当前句
+                cues: buildCues(job.lines || splitLyricLines(text), result),
+                buffer: Buffer.isBuffer(result.audio) ? result.audio : Buffer.from(result.audio),
+                duration: Number(result.duration) || 0,
+                // Edge 回来的是 MP3、本地兜底回来的是 WAV，路由按这个下发 Content-Type
+                mime: result.mime === 'audio/wav' ? 'audio/wav' : 'audio/mpeg',
+                chime: job.chime === true,
+                at: Date.now(),
+              }
+              ready.set(item.id, item)
+              lastError = ''
+              synthFailCount = 0
+              trimReady()
+              // 日志里的声线名要写「真正发声的那条」：本地档是系统声线（瑶瑶/Huihui），
+              // 不是 Edge 的 id，否则又会造出「显示晓晓、实际念瑶瑶」那种假记录
+              log(`synth ok id=${item.id} voice=${result.voiceName || item.voice} chars=${item.chars} bytes=${item.buffer.length} dur=${item.duration}`)
+              bump()
+              break
+            } catch (error) {
+              attempt += 1
+              synthFailCount += 1
+              lastError = String(error?.message ?? error).split('\n')[0]
+              log(`synth fail id=${id} chars=${text.length} attempt=${attempt} err=${lastError}`)
+              bump()
+              if (epoch !== myEpoch) break
+              // 退避翻倍、封顶 15 秒：Edge 恢复后这一段一定能补上，只是可能要等一会儿
+              const backoff = Math.min(SYNTH_RETRY_BASE_MS * 2 ** Math.min(attempt - 1, 4), SYNTH_RETRY_MAX_MS)
+              log(`synth retry id=${id} attempt=${attempt} retry_in=${backoff}ms`)
+              await sleep(backoff)
             }
-            ready.set(item.id, item)
-            lastError = ''
-            synthFailCount = 0
-            trimReady()
-            log(`synth ok id=${item.id} voice=${item.voice} chars=${item.chars} bytes=${item.buffer.length} dur=${item.duration}`)
-            bump()
-          } catch (error) {
-            synthFailCount += 1
-            lastError = String(error?.message ?? error).split('\n')[0]
-            log(`synth fail id=${id} chars=${text.length} err=${lastError}`)
-            // 单段失败只跳过这段，不影响后面
-            bump()
           }
         }
       }
@@ -1211,6 +1939,8 @@ export function apply(ctx, config = {}) {
         chime: chime === true && index === 0,
       })))
       log(`enqueue chunks=${total} chars=${chunks.reduce((s, c) => s + c.length, 0)} interrupt=${interrupt}`)
+      // 每段的头尾各记一小截：排查"标题和正文连读"时，看的就是标题后面到底有没有省略号
+      chunks.forEach((piece, i) => log(`enqueue seg ${i + 1}/${total} len=${piece.length} head=${JSON.stringify(piece.slice(0, 16))} tail=${JSON.stringify(piece.slice(-10))}`))
       void pump()
       return { chunks: chunks.length, chars: chunks.reduce((sum, piece) => sum + piece.length, 0) }
     }
@@ -1332,6 +2062,10 @@ export function apply(ctx, config = {}) {
       const nextText = nextSource === null ? '' : (nextSource.preview !== undefined
         ? nextSource.preview
         : (nextSource.text.length > 120 ? `${nextSource.text.slice(0, 120)}…` : nextSource.text))
+      // 本机模式下面板和日志要显示真正发声的那条声线，否则写着"晓晓"、实际念的是瑶瑶
+      const localDisplay = (localVoiceSnapshot?.name || LOCAL_VOICE)
+        .replace(/^Microsoft\s+/i, '')
+        .replace(/\s+Desktop$/i, '')
       return {
         ok: true,
         rev,
@@ -1348,9 +2082,11 @@ export function apply(ctx, config = {}) {
         })(),
         settings: {
           voice: settings.voice,
-          voiceLabel: voiceLabel(settings.voice),
-          voiceName: voiceName(settings.voice),
-          previewText: previewTextFor(settings.voice),
+          voiceLabel: settings.ttsEngine === 'local' ? `${localDisplay}·本机` : voiceLabel(settings.voice),
+          voiceName: settings.ttsEngine === 'local' ? localDisplay : voiceName(settings.voice),
+          previewText: settings.ttsEngine === 'local'
+            ? `你好，我是${localDisplay}。这是 dsh-live-speak 的试听，语速 ${settings.rate}。`
+            : previewTextFor(settings.voice),
           rate: settings.rate,
           volume: settings.volume,
           targetChars: settings.targetChars,
@@ -1360,6 +2096,17 @@ export function apply(ctx, config = {}) {
           codeQuiet: settings.codeQuiet,
           dockExpanded: settings.dockExpanded,
           dock: settings.dock,
+          eq: settings.eq,
+          ttsEngine: settings.ttsEngine,
+          /** 本机声线清单（三端统一结构：name / id / lang / engine），空数组＝还没探到。 */
+          localVoices: localVoicesSnapshot,
+          /** 当前实际发声的那条（用户没选时是自动挑出来的），设置页面下拉就选它。 */
+          localVoice: localVoiceSnapshot ? localVoiceSnapshot.name : '',
+          /** 用户自己选过的那条，空＝让它自动挑。 */
+          localVoiceSelected: settings.localVoice,
+          /** 实际走的本机后端：winrt / sapi / say / espeak。 */
+          localVoiceEngine: localVoiceSnapshot ? localVoiceSnapshot.engine : '',
+          hasNaturalLocalVoice: hasNaturalLocalVoice(localVoicesSnapshot),
         },
         /** 设置面板的声线下拉用这份清单，避免客户端自己维护一份。 */
         voices: VOICES,
@@ -1773,7 +2520,7 @@ export function apply(ctx, config = {}) {
             }
             const total = item.buffer.length
             const range = String(req.headers.range ?? '')
-            res.setHeader('Content-Type', 'audio/mpeg')
+            res.setHeader('Content-Type', item.mime === 'audio/wav' ? 'audio/wav' : 'audio/mpeg')
             res.setHeader('Accept-Ranges', 'bytes')
             res.setHeader('Cache-Control', 'no-store')
             // 支持单区间 Range：Chromium 的 <audio> 会先要一小段探测时长
@@ -1840,10 +2587,13 @@ export function apply(ctx, config = {}) {
             bump()
             return { payload: { ok: true, auto: settings.auto } }
           }),
-          // 页面播完一段，让宿主回收缓冲
+          // 页面播完一段，让宿主回收缓冲，并把合成队列往前推一段
           post('/consume', (body) => {
             const id = Number(body?.id)
-            if (Number.isFinite(id) && ready.delete(id)) bump()
+            if (Number.isFinite(id) && ready.delete(id)) {
+              bump()
+              void pump()
+            }
             return { payload: { ok: true } }
           }),
           // 停止：清空还没播的
@@ -1860,10 +2610,21 @@ export function apply(ctx, config = {}) {
             const patch = body !== null && typeof body === 'object' ? body : {}
             const next = normalizeSettings({ ...settings, ...patch })
             Object.assign(settings, next)
+            // 用户刚换了本机声线：立刻按新选择重算"当前发声的那条"，
+            // 否则设置页要等下一次探测（最多 5 分钟）才显示对
+            localVoiceSnapshot = pickLocalVoice(localVoicesSnapshot)
             writeSettings(settings)
             bump()
             return { payload: { ok: true, settings: snapshot().settings } }
           }),
+          // 重新检测本机声线：用户刚装完语音包时点设置页那个按钮，绕开 5 分钟缓存立刻重探
+          post('/local-voices', () => refreshLocalVoices(true)
+            .then(() => ({ payload: {
+              ok: true,
+              voices: localVoicesSnapshot,
+              localVoice: localVoiceSnapshot ? localVoiceSnapshot.name : '',
+              localVoiceEngine: localVoiceSnapshot ? localVoiceSnapshot.engine : '',
+            } }))),
           // 界面里手动念一段；append 模式用于流式逐句追加（不打断正在念的）
           post('/speak', (body) => {
             const text = String(body?.text ?? '')
@@ -1957,7 +2718,7 @@ export function apply(ctx, config = {}) {
         for (const route of routes) {
           if (typeof route === 'function') disposers.push(route)
         }
-        log('routes registered: state, audio, auto, consume, clear, settings, speak, debug')
+        log('routes registered: state, audio, auto, consume, clear, settings, local-voices, speak, debug')
       }
     } catch (error) {
       log(`routes failed: ${String(error?.message ?? error)}`)
@@ -1989,6 +2750,10 @@ export function apply(ctx, config = {}) {
     void ensureEngine()
       .then((mod) => log('edge-tts 依赖加载 OK', `EdgeTTS=${typeof mod?.EdgeTTS}`, `Constants=${typeof mod?.Constants}`))
       .catch((error) => log('edge-tts 依赖加载失败', String(error?.message ?? error)))
+
+    // 同时探一次本机语音：设置页要在「只装了机器音」时给出装晓晓的引导，
+    // 播报时也按探测结果挑最自然的那一个。
+    void refreshLocalVoices()
 
     return () => {
       for (const dispose of disposers) {

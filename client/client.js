@@ -86,7 +86,7 @@
             "settings.auto": "自动播报",
             "settings.auto.hint": "模型回复时自动念，不用手动触发",
             "settings.realtime": "实时播报",
-            "settings.realtime.hint": "边生成边念，第一句比整段写完早十几秒出声",
+            "settings.realtime.hint": "模型流式输出时边写边念，不等整段写完；非流式模型则在整段到达后立刻开念",
             "settings.interrupt": "新回复打断旧内容",
             "settings.interrupt.hint": "关掉则把旧的念完再念新的",
             "settings.codeQuiet": "写代码时只念开头和结果",
@@ -99,15 +99,34 @@
             "settings.dock.sidebar": "左侧导航栏",
             "settings.dock.sidebar.hint": "窄条贴底",
             "settings.group.voice": "声音",
+            "settings.group.engine": "播报引擎",
+            "settings.engine.online": "线上语音",
+            "settings.engine.online.hint": "微软神经声线，最自然；只走线上，不会换成本机声线",
+            "settings.engine.local": "本地语音",
+            "settings.engine.local.hint": "用系统自带声线，不联网、零安装，起播最快",
             "settings.voice": "声线",
             "settings.voice.hint": "纯英文声线念中文会自动退回晓晓；想听洋腔中文选带「能念中文」的那两条",
+            "settings.voice.localHint": "本机装了几条就列几条，装了新语音包点右边重新检测",
+            "settings.voice.localNone": "未检测到可用声线",
+            "settings.voice.refresh": "重新检测",
             "settings.rate": "语速",
             "settings.rate.hint": "正数更快，负数更慢，范围 -50% ~ +100%",
+            "settings.chunk": "段落字数",
+            "settings.chunk.hint": "越大越连贯，越小越早出声；本地引擎合成快，长文章可设 200~300",
+            "settings.chunk.unit": "字",
             "settings.volume": "播放音量",
             "settings.volume.hint": "页面侧实际出声的音量",
             "settings.preview": "试听",
             "settings.preview.hint": "用当前声线念一句，确认效果",
             "settings.preview.btn": "试听",
+            "settings.group.eq": "均衡器",
+            "settings.eq.flat": "默认",
+            "settings.eq.clarity": "人声清晰",
+            "settings.eq.soft": "温柔",
+            "settings.eq.deep": "浑厚",
+            "settings.eq.custom": "自定义",
+            "settings.eq.reset": "重置",
+            "settings.eq.hint": "拖动滑块立刻生效；只改声音的明暗厚薄，改不了机械语调。",
             "panel.foot": "声线、语速、音量、播放条位置都能在「设置 → Edge 语音播报」里改。",
             "voice.default": "晓晓",
             "preview.default": "你好，我是晓晓。这是试听。"
@@ -154,7 +173,7 @@
             "settings.auto": "Auto speak",
             "settings.auto.hint": "Read replies aloud without pressing anything",
             "settings.realtime": "Live speaking",
-            "settings.realtime.hint": "Starts on the first sentence, more than ten seconds earlier than reading the finished reply",
+            "settings.realtime.hint": "Speaks while the model is still writing when it streams; otherwise starts the moment the full reply arrives",
             "settings.interrupt": "Interrupt on new reply",
             "settings.interrupt.hint": "Turn off to finish the old reply before the new one",
             "settings.codeQuiet": "Quiet while writing code",
@@ -167,15 +186,34 @@
             "settings.dock.sidebar": "Sidebar row",
             "settings.dock.sidebar.hint": "A row in the left navigation",
             "settings.group.voice": "Voice",
+            "settings.group.engine": "Speech engine",
+            "settings.engine.online": "Online",
+            "settings.engine.online.hint": "Microsoft neural voices, the most natural; online only, never switches to a system voice",
+            "settings.engine.local": "On this computer",
+            "settings.engine.local.hint": "Uses the system voices: no network, nothing to install, starts fastest",
             "settings.voice": "Voice",
             "settings.voice.hint": "English-only voices fall back to Xiaoxiao for Chinese; pick a Multilingual voice for Chinese with an accent",
+            "settings.voice.localHint": "Every voice installed here is listed; click refresh after installing a new one",
+            "settings.voice.localNone": "No usable voice found",
+            "settings.voice.refresh": "Refresh",
             "settings.rate": "Rate",
             "settings.rate.hint": "Positive is faster, negative is slower, from -50% to +100%",
+            "settings.chunk": "Paragraph size",
+            "settings.chunk.hint": "Larger is smoother, smaller starts earlier; with the local engine 200–300 is fine for long text",
+            "settings.chunk.unit": "chars",
             "settings.volume": "Playback volume",
             "settings.volume.hint": "Volume of the audio played in this page",
             "settings.preview": "Preview",
             "settings.preview.hint": "Hear the current voice with one sentence",
             "settings.preview.btn": "Play",
+            "settings.group.eq": "Equalizer",
+            "settings.eq.flat": "Flat",
+            "settings.eq.clarity": "Clarity",
+            "settings.eq.soft": "Soft",
+            "settings.eq.deep": "Deep",
+            "settings.eq.custom": "Custom",
+            "settings.eq.reset": "Reset",
+            "settings.eq.hint": "Moves take effect instantly. Brightness and body only — robotic cadence stays.",
             "panel.foot": "Voice, rate, volume and bar position are under Settings → Edge Speech.",
             "voice.default": "Xiaoxiao",
             "preview.default": "Hi, this is a preview of the current voice."
@@ -222,7 +260,7 @@
             "settings.auto": "自動読み上げ",
             "settings.auto.hint": "返信を自動で読み上げます",
             "settings.realtime": "リアルタイム読み上げ",
-            "settings.realtime.hint": "生成しながら読み上げ、最初の一文は完了後の読み上げより十数秒早く始まります",
+            "settings.realtime.hint": "モデルがストリーミング出力のときは書きながら読み上げ、そうでなければ全文が届いた直後に始まります",
             "settings.interrupt": "新しい返信で中断",
             "settings.interrupt.hint": "オフにすると古い返信を最後まで読み上げてから新しい返信を読みます",
             "settings.codeQuiet": "コード生成中は静かに",
@@ -235,15 +273,34 @@
             "settings.dock.sidebar": "左のナビゲーション",
             "settings.dock.sidebar.hint": "左側のナビゲーションの 1 行",
             "settings.group.voice": "声",
+            "settings.group.engine": "読み上げエンジン",
+            "settings.engine.online": "オンライン",
+            "settings.engine.online.hint": "Microsoft のニューラル音声で最も自然。オンライン専用で、この PC の音声には切り替わりません",
+            "settings.engine.local": "この PC で読み上げ",
+            "settings.engine.local.hint": "システム内蔵の音声を使用。ネット不要・追加インストール不要で、最も早く鳴ります",
             "settings.voice": "声",
             "settings.voice.hint": "英語専用の声で中国語を読むと Xiaoxiao に戻ります。中国語を読みたい場合は Multilingual の声を選んでください",
+            "settings.voice.localHint": "この PC にある音声をすべて表示します。新しい音声を入れたら右の再検出を押してください",
+            "settings.voice.localNone": "使用できる音声が見つかりません",
+            "settings.voice.refresh": "再検出",
             "settings.rate": "速度",
             "settings.rate.hint": "正の値で速く、負の値で遅く、範囲は -50% 〜 +100%",
+            "settings.chunk": "段落の文字数",
+            "settings.chunk.hint": "大きいほど滑らか、小さいほど早く話し始める。ローカルエンジンなら長文でも 200〜300 が快適",
+            "settings.chunk.unit": "字",
             "settings.volume": "再生音量",
             "settings.volume.hint": "このページで実際に鳴る音量",
             "settings.preview": "試聴",
             "settings.preview.hint": "現在の声で一文を読み上げて確認",
             "settings.preview.btn": "試聴",
+            "settings.group.eq": "イコライザー",
+            "settings.eq.flat": "フラット",
+            "settings.eq.clarity": "クリア",
+            "settings.eq.soft": "ソフト",
+            "settings.eq.deep": "低音",
+            "settings.eq.custom": "カスタム",
+            "settings.eq.reset": "リセット",
+            "settings.eq.hint": "スライダーは即時反映。明暗と厚みのみ調整、機械的な抑揚は変わりません。",
             "panel.foot": "声・速度・音量・表示位置は「設定 → Edge 音声読み上げ」で変更できます。",
             "voice.default": "Xiaoxiao",
             "preview.default": "こんにちは。これは現在の声の試聴です。"
@@ -292,14 +349,26 @@
          * 非中文界面改用插件自带的英文名：拿 settings.voice 去声线表里查。
          */
         function voiceNameOf(state) {
-          var id = state && state.settings ? state.settings.voice : "";
+          var s = (state && state.settings) || {};
+          // 本地档：真正发声的是系统里的那条声线，宿主已经把它下成
+          // voiceName（Huihui Desktop 这种原名）和 voiceLabel（「Huihui·本机」）。
+          // 这一支必须放在查表之前，否则会拿 Edge 的 id 查出「晓晓」，
+          // 卡片上写着晓晓、耳朵里却是本机声线。
+          if (s.ttsEngine === "local") {
+            if (UI_LANG === "zh" && s.voiceLabel) return s.voiceLabel;
+            var localRaw = String(s.voiceName || s.localVoice || "")
+              .replace(/^Microsoft\s+/i, "")
+              .replace(/\s+Desktop$/i, "");
+            if (localRaw) return localRaw;
+          }
+          var id = s.voice || "";
           var list = (manager && manager.voices) || (state && state.voices) || [];
           for (var i = 0; i < list.length; i++) {
             if (list[i] && list[i].id === id) {
               return (UI_LANG === "zh" || !list[i].labelEn) ? list[i].label : list[i].labelEn;
             }
           }
-          var raw = state && state.settings ? state.settings.voiceName : "";
+          var raw = s.voiceName || "";
           return raw || t("voice.default");
         }
 
@@ -509,7 +578,20 @@
           ".dshLiveDockOptionHint{font-size:11px;line-height:1.3;color:var(--dsw-alias-label-tertiary,#8e8e93)}",
           ".dshLiveSelect{flex:none;height:30px;min-width:170px;max-width:236px;padding:0 8px;border-radius:8px;font:inherit;font-size:12.5px;color:inherit;background:var(--dsw-alias-bg-base,#fff);border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.3));cursor:pointer}",
           ".dshLiveRange{flex:none;width:186px;margin:0;accent-color:var(--dsw-alias-button-info-fill,#007aff)}",
+          ".dshLiveEqHead{display:flex;align-items:center;gap:8px;padding:10px 12px 2px}",
+          ".dshLiveEqPreset{flex:1;min-width:0}",
+          ".dshLiveEqReset{flex:none}",
+          ".dshLiveEqBands{display:flex;align-items:flex-end;justify-content:space-between;gap:2px;padding:10px 8px 2px}",
+          ".dshLiveEqBand{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0}",
+          ".dshLiveEqSlider{-webkit-appearance:slider-vertical;writing-mode:vertical-lr;direction:rtl;width:20px;height:112px;margin:0;accent-color:var(--dsw-alias-button-info-fill,#007aff)}",
+          ".dshLiveEqFreq{font-size:10px;line-height:1;color:var(--dsw-alias-label-tertiary,#8e8e93)}",
+          ".dshLiveEqDb{font-size:10px;line-height:1;font-variant-numeric:tabular-nums;min-height:12px;color:var(--dsw-alias-label-secondary,#6c6c70)}",
+          ".dshLiveEqHint{padding:6px 12px 10px;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-tertiary,#8e8e93)}",
           ".dshLiveValue{flex:none;min-width:52px;text-align:right;font-size:12px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary,#3c3c43)}",
+          ".dshLiveEngineOption{min-height:72px;justify-content:center}",
+          ".dshLiveVoicePick{display:flex;flex:none;align-items:center;gap:8px}",
+          ".dshLiveVoicePick .dshLiveSelect{min-width:120px;max-width:186px}",
+          ".dshLiveVoiceRefresh{padding:0 10px}",
           ".dshLiveTestBtn{flex:none;height:30px;padding:0 14px;border:none;border-radius:8px;font:inherit;font-size:12.5px;font-weight:400;cursor:pointer;color:#fff;background:var(--dsw-alias-button-info-fill,#007aff)}",
           ".dshLiveTestBtn:hover{filter:brightness(1.06)}",
         ].join("");
@@ -804,6 +886,89 @@
           }
         }
 
+        // ── 均衡器：播放端的 10 段 BiquadFilter 链 ──────────────────
+        // 接在 <audio> 元素之后、扬声器之前，不碰合成也不碰下载，
+        // 所以播放中拖动滑块就能立刻听到变化，不用重新合成。
+        var EQ_BANDS = [31, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+        var EQ_BAND_LABELS = ["31", "63", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
+        // 预设：数值是每段增益（dB）。都只动频率响应，不动语速和停顿。
+        var EQ_PRESETS = [
+          { id: "flat", label: "settings.eq.flat", eq: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+          // 清晰：削掉 250 那段的闷，抬 1k~4k 的辅音
+          { id: "clarity", label: "settings.eq.clarity", eq: [0, 1, 0, -2, 1, 3, 3, 2, 0, -1] },
+          // 温柔：低频补厚度，2k~4k 压掉刺耳，高频去数码毛刺
+          { id: "soft", label: "settings.eq.soft", eq: [-2, -1, 2, 2, 0, -1, -3, -4, -3, -4] },
+          // 浑厚：只补低频
+          { id: "deep", label: "settings.eq.deep", eq: [3, 3, 2, 1, 0, 0, 0, 0, 0, 0] },
+        ];
+        var eqCtx = null;
+        var eqNodes = null;
+
+        function ensureEqChain() {
+          if (eqNodes !== null) return eqCtx;
+          var Ctx = window.AudioContext || window.webkitAudioContext;
+          if (typeof Ctx !== "function") return null;
+          eqCtx = new Ctx();
+          eqNodes = EQ_BANDS.map(function (freq, i) {
+            var node = eqCtx.createBiquadFilter();
+            if (i === 0) node.type = "lowshelf";
+            else if (i === EQ_BANDS.length - 1) node.type = "highshelf";
+            else {
+              node.type = "peaking";
+              node.Q.value = 1;
+            }
+            node.frequency.value = freq;
+            node.gain.value = 0;
+            return node;
+          });
+          for (var j = 1; j < eqNodes.length; j += 1) eqNodes[j - 1].connect(eqNodes[j]);
+          // destination 只在这里接一次：每次播放都重复 connect 会让音量叠加
+          eqNodes[eqNodes.length - 1].connect(eqCtx.destination);
+          return eqCtx;
+        }
+
+        function applyEq(values) {
+          if (eqNodes === null) return;
+          var arr = Array.isArray(values) ? values : [];
+          for (var i = 0; i < eqNodes.length; i += 1) {
+            var g = Number(arr[i]);
+            eqNodes[i].gain.value = Number.isFinite(g) ? Math.max(-12, Math.min(12, g)) : 0;
+          }
+        }
+
+        /**
+         * 把一段音频接到均衡器上。
+         * 拿不到 running 的 AudioContext 就直接放弃、走原生播放 ——
+         * 均衡器可以有，但不能因为它把声音弄没了。
+         */
+        function attachEq(audio) {
+          var ctx = ensureEqChain();
+          if (ctx === null) return null;
+          var src = null;
+          try {
+            var st = String(ctx.state || "");
+            if (st !== "running") {
+              try { if (typeof ctx.resume === "function") ctx.resume(); } catch {}
+              st = String(ctx.state || "");
+            }
+            if (st !== "running") {
+              post("/debug", { what: "eq-bypass", state: st });
+              return null;
+            }
+            src = ctx.createMediaElementSource(audio);
+            src.connect(eqNodes[0]);
+            applyEq((manager.settings || {}).eq);
+            return src;
+          } catch (e) {
+            post("/debug", { what: "eq-fail", err: String((e && e.message) || e) });
+            // 元素已经被接管但链没接上 = 彻底没声，这里直连扬声器保底
+            if (src !== null) {
+              try { src.connect(ctx.destination); } catch {}
+            }
+            return null;
+          }
+        }
+
         /** 真正开始下一段。 */
         function playItem(item) {
           releaseAudio();
@@ -842,6 +1007,8 @@
           manager.audio = audio;
           audio.volume = effectiveVolume();
           audio.preload = "auto";
+          // 均衡器接不上（极少数环境）就保持原声，不影响播报
+          manager.audioEq = attachEq(audio);
 
           // 分母优先用后端给的时长：Edge TTS 的 mp3 在播放前 audio.duration 常是 Infinity，
           // 只能等播放一会儿才变成真值，中间那几秒没有后端时长的话进度条就是空的。
@@ -1138,6 +1305,7 @@
               if (data.settings) {
                 var oldVolume = manager.settings.playbackVolume;
                 manager.settings = data.settings;
+                applyEq(data.settings.eq);
                 if (manager.audio !== null && oldVolume !== data.settings.playbackVolume) {
                   manager.audio.volume = effectiveVolume();
                 }
@@ -2401,21 +2569,61 @@
           // 播放条位置只保留两种形态：顶栏（嵌进标题栏 actions）/ 左侧导航栏（占有导航行）
           var dock = settings.dock === "top" ? "top" : "sidebar";
           var voices = manager.voices || [];
+          // 本机声线清单由宿主探测后下发（三端统一结构：name / id / lang / engine）
+          var localVoices = Array.isArray(settings.localVoices) ? settings.localVoices : [];
           var rateValue = parseInt(String(settings.rate || "+0%").replace(/[^0-9-]/gu, ""), 10) || 0;
           var volumePercent = Math.round((settings.playbackVolume || 0.9) * 100);
+          // 均衡器当前值：宿主没给或不合法时按全 0（等于不做任何增益）
+          var eqValues = (Array.isArray(settings.eq) && settings.eq.length === EQ_BANDS.length)
+            ? settings.eq.map(function (v) { var n = Number(v); return Number.isFinite(n) ? n : 0; })
+            : EQ_BANDS.map(function () { return 0; });
+          // 从数值反推当前是哪个预设，对不上任何一个就是「自定义」
+          var eqPresetName = (function () {
+            for (var pi = 0; pi < EQ_PRESETS.length; pi += 1) {
+              var preset = EQ_PRESETS[pi];
+              var same = true;
+              for (var pj = 0; pj < eqValues.length; pj += 1) {
+                if (Number(preset.eq[pj]) !== Number(eqValues[pj])) { same = false; break; }
+              }
+              if (same) return preset.id;
+            }
+            return "custom";
+          })();
 
           function save(patch) {
             // 切换要"立刻"看得见：先本地合并并广播一次重渲染，再交给宿主落盘。
             // 只 POST 不说话的话，得等下一次 600ms 轮询，看起来像"点了不生效"。
             manager.settings = Object.assign({}, manager.settings || {}, patch);
+            if (patch.eq !== undefined) applyEq(patch.eq);
             emit();
             if (patch.dock !== undefined) post("/debug", { what: "dock-set", dock: String(patch.dock) });
             post("/settings", patch);
           }
 
+          function setEqValues(next) {
+            save({ eq: next.slice() });
+          }
+
+          function setEqPreset(name) {
+            var preset = null;
+            for (var ei = 0; ei < EQ_PRESETS.length; ei += 1) {
+              if (EQ_PRESETS[ei].id === name) { preset = EQ_PRESETS[ei]; break; }
+            }
+            if (preset === null) return;
+            save({ eq: preset.eq.slice() });
+          }
+
           var dockOptions = [
             ["top", t("settings.dock.top"), t("settings.dock.top.hint")],
             ["sidebar", t("settings.dock.sidebar"), t("settings.dock.sidebar.hint")]
+          ];
+
+          // 播报引擎二选一：线上（Edge 神经声线，失败自动切本地）/ 本地（系统自带声线，零网络零安装）。
+          // 数据层仍保留 auto 这一档，做老配置兼容：除 local 之外一律按「线上」显示。
+          var engineMode = settings.ttsEngine === "local" ? "local" : "online";
+          var engineOptions = [
+            ["online", t("settings.engine.online"), t("settings.engine.online.hint")],
+            ["local", t("settings.engine.local"), t("settings.engine.local.hint")]
           ];
 
           return h("div", { className: "dshLiveSettings" },
@@ -2503,22 +2711,86 @@
             ),
 
             h("div", { className: "dshLiveSettingsGroup" },
+              h("div", { className: "dshLiveSettingsGroupTitle" }, t("settings.group.engine")),
+              h("div", { className: "dshLiveSettingsCard" },
+                h("div", { className: "dshLiveDockPicker" },
+                  engineOptions.map(function (option) {
+                    var pick = fire(function () {
+                      // 「线上」就是纯线上：只用神经声线，绝不悄悄换成系统声线
+                      save({ ttsEngine: option[0] === "local" ? "local" : "edge" });
+                    });
+                    return h("button", {
+                      type: "button",
+                      key: option[0],
+                      className: "dshLiveDockOption dshLiveEngineOption",
+                      "data-active": engineMode === option[0] ? "true" : "false",
+                      "aria-pressed": engineMode === option[0] ? "true" : "false",
+                      onPointerDown: pick,
+                      onClick: pick
+                    },
+                      h("span", { className: "dshLiveDockOptionName" }, option[1]),
+                      h("span", { className: "dshLiveDockOptionHint" }, option[2])
+                    );
+                  })
+                )
+              )
+            ),
+
+            h("div", { className: "dshLiveSettingsGroup" },
               h("div", { className: "dshLiveSettingsGroupTitle" }, t("settings.group.voice")),
               h("div", { className: "dshLiveSettingsCard" },
-                h(SettingsRow, { title: t("settings.voice"), hint: t("settings.voice.hint") },
-                  h("select", {
-                    className: "dshLiveSelect",
-                    value: settings.voice || "",
-                    onChange: function (event) {
-                      save({ voice: event.target.value });
-                    }
-                  },
-                    voices.map(function (voice) {
-                      // 宿主只给中文标签；非中文界面用插件自己带的英文名（声线本身都是英文 id）
-                      var name = UI_LANG === "zh" || !voice.labelEn ? voice.label : voice.labelEn;
-                      return h("option", { key: voice.id, value: voice.id }, name);
-                    })
-                  )
+                // 本地引擎念的是系统声线：本机有几条就列几条，让用户自己挑，
+                // 装了新语音包点右边「重新检测」立刻重探（宿主那边缓存 5 分钟）。
+                h(SettingsRow, {
+                  title: t("settings.voice"),
+                  hint: engineMode === "local" ? t("settings.voice.localHint") : t("settings.voice.hint")
+                },
+                  engineMode === "local"
+                    ? h("div", { className: "dshLiveVoicePick" },
+                        h("select", {
+                          className: "dshLiveSelect",
+                          value: settings.localVoice || "",
+                          onChange: function (event) {
+                            save({ localVoice: event.target.value });
+                          }
+                        },
+                          localVoices.length === 0
+                            ? h("option", { value: "" }, t("settings.voice.localNone"))
+                            : localVoices.map(function (item, index) {
+                                // 宿主给的是系统里的原始名（Microsoft Yaoyao Desktop 这种），
+                                // 只去掉微软前缀；「Desktop」后缀必须留着——同名的 WinRT 版和
+                                // SAPI 版会成对出现（Huihui / Huihui Desktop），剥掉就变成两条
+                                // 一模一样、用户分不清选哪条的选项
+                                var name = String(item.name || "").replace(/^Microsoft\s+/i, "") || String(item.name || "");
+                                var tag = item.lang ? " · " + item.lang : "";
+                                // key 用「位置+名字」：同名条目并存时 React 才不会把两条并成一条
+                                return h("option", { key: index + ":" + item.name, value: item.name }, name + tag);
+                              })
+                        ),
+                        h("button", {
+                          type: "button",
+                          className: "dshLiveTestBtn dshLiveVoiceRefresh",
+                          onPointerDown: fire(function () {
+                            post("/local-voices", {}).then(function () { poll(); }).catch(function () {});
+                          }),
+                          onClick: fire(function () {
+                            post("/local-voices", {}).then(function () { poll(); }).catch(function () {});
+                          })
+                        }, t("settings.voice.refresh"))
+                      )
+                    : h("select", {
+                        className: "dshLiveSelect",
+                        value: settings.voice || "",
+                        onChange: function (event) {
+                          save({ voice: event.target.value });
+                        }
+                      },
+                        voices.map(function (voice) {
+                          // 宿主只给中文标签；非中文界面用插件自己带的英文名（声线本身都是英文 id）
+                          var name = UI_LANG === "zh" || !voice.labelEn ? voice.label : voice.labelEn;
+                          return h("option", { key: voice.id, value: voice.id }, name);
+                        })
+                      )
                 ),
                 h(SettingsRow, { title: t("settings.rate"), hint: t("settings.rate.hint") },
                   h("input", {
@@ -2534,6 +2806,20 @@
                     }
                   }),
                   h("span", { className: "dshLiveValue" }, settings.rate || "+0%")
+                ),
+                h(SettingsRow, { title: t("settings.chunk"), hint: t("settings.chunk.hint") },
+                  h("input", {
+                    type: "range",
+                    className: "dshLiveRange",
+                    min: 40,
+                    max: 300,
+                    step: 20,
+                    value: Number(settings.targetChars) || 120,
+                    onChange: function (event) {
+                      save({ targetChars: Number(event.target.value) });
+                    }
+                  }),
+                  h("span", { className: "dshLiveValue" }, (Number(settings.targetChars) || 120) + " " + t("settings.chunk.unit"))
                 ),
                 h(SettingsRow, { title: t("settings.volume"), hint: t("settings.volume.hint") },
                   h("input", {
@@ -2561,6 +2847,56 @@
                     })
                   }, t("settings.preview.btn"))
                 )
+              )
+            ),
+
+            h("div", { className: "dshLiveSettingsGroup" },
+              h("div", { className: "dshLiveSettingsGroupTitle" }, t("settings.group.eq")),
+              h("div", { className: "dshLiveSettingsCard" },
+                h("div", { className: "dshLiveEqHead" },
+                  h("select", {
+                    className: "dshLiveSelect dshLiveEqPreset",
+                    value: eqPresetName,
+                    onChange: function (event) {
+                      setEqPreset(event.target.value);
+                    }
+                  },
+                    eqPresetName === "custom" ? h("option", { value: "custom" }, t("settings.eq.custom")) : null,
+                    EQ_PRESETS.map(function (preset) {
+                      return h("option", { key: preset.id, value: preset.id }, t(preset.label));
+                    })
+                  ),
+                  h("button", {
+                    type: "button",
+                    className: "dshLiveTestBtn dshLiveEqReset",
+                    onPointerDown: fire(function () { setEqPreset("flat"); }),
+                    onClick: fire(function () { setEqPreset("flat"); })
+                  }, t("settings.eq.reset"))
+                ),
+                h("div", { className: "dshLiveEqBands" },
+                  EQ_BANDS.map(function (freq, band) {
+                    var value = Number(eqValues[band]) || 0;
+                    return h("div", { className: "dshLiveEqBand", key: freq },
+                      h("input", {
+                        type: "range",
+                        className: "dshLiveEqSlider",
+                        min: -12,
+                        max: 12,
+                        step: 1,
+                        value: value,
+                        "aria-label": EQ_BAND_LABELS[band] + "Hz",
+                        onChange: function (event) {
+                          var next = eqValues.slice();
+                          next[band] = Number(event.target.value);
+                          setEqValues(next);
+                        }
+                      }),
+                      h("span", { className: "dshLiveEqFreq" }, EQ_BAND_LABELS[band]),
+                      h("span", { className: "dshLiveEqDb" }, (value > 0 ? "+" : "") + value)
+                    );
+                  })
+                ),
+                h("div", { className: "dshLiveEqHint" }, t("settings.eq.hint"))
               )
             )
           );
@@ -2635,9 +2971,10 @@
             var guard = 0;
             while (stream.buffer.length > 0 && guard < 40) {
               guard += 1;
-              // 首句门槛低一些，尽快有人声；之后每段攒到 36 字左右，
-              // 让合成速度跟得上播放，不至于一句一卡。
-              var need = stream.firstDone ? 36 : 14;
+              // 首句门槛 140 字：这一段能播 26 秒左右，要覆盖的是「模型把整篇吐完的时间
+              // ＋ 主文首段在 Edge 排队里的合成时间」，实测这两项加起来 20~30 秒，80 字
+              // （16 秒）顶不住，开头会空十几秒；之后再按「段落字数」这个设置值切。
+              var need = stream.firstDone ? Math.max(40, Number(settings.targetChars) || 120) : 140;
               var cut = 0;
               var i = 0;
               for (i = 0; i < stream.buffer.length; i += 1) {
@@ -2647,13 +2984,14 @@
                 }
               }
               if (cut === 0) {
-                // 一直没到门槛就攒着；攒到 90 字说明没遇到句号，只能在逗号处硬切
-                if (stream.buffer.length < 90) break;
+                // 没遇到够长的句号就继续攒；攒够 need 字还全是逗号，就在最后一个逗号处硬切。
+                // 这里的上限必须跟着 need 走——写死 90 会在门槛 140 时提前软切，门槛形同虚设。
+                if (stream.buffer.length < need) break;
                 var soft = 0;
                 for (i = 0; i < stream.buffer.length; i += 1) {
                   if (RE_SOFT.test(stream.buffer.charAt(i))) soft = i + 1;
                 }
-                cut = soft > 20 ? soft : 90;
+                cut = soft > 20 ? soft : need;
               }
               var head = stream.buffer.slice(0, cut);
               stream.buffer = stream.buffer.slice(cut);
@@ -2672,6 +3010,8 @@
               var data = (event && event.data) || {};
               var chunk = data.chunk;
               if (!chunk) return;
+              // 逐条增量打点已删除：一篇长文能写出九百多行、把日志迅速撑到轮转，
+              // 反而挤掉了真正要查的 enqueue / synth / play 记录。排查看 block-type。
               manager.streamingAt = Date.now();
               if (manager.streaming !== true) {
                 manager.streaming = true;

@@ -2,6 +2,9 @@
 node_modules/
 *.tgz
 
+# 本地实验用的大模型目录：不进公开仓库，也不进 npm 包
+vendor/
+
 # 内部资料：不进公开仓库，也不进 npm 包
 _tmp/
 tools/
