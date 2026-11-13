@@ -479,10 +479,15 @@ function cleanForSpeech(raw) {
   text = text.replace(/^\s{0,3}>\s?/gmu, '')
   text = text.replace(/^\s{0,3}[-*+]\s+/gmu, '')
   text = text.replace(/^\s{0,3}\d+[.)]\s+/gmu, '')
-  text = text.replace(/\*\*([^*]+)\*\*/gu, '$1')
-  text = text.replace(/~~([^~]+)~~/gu, '$1')
-  text = text.replace(/(^|[^*])\*([^*\n]+)\*/gu, '$1$2')
-  text = text.replace(/^\s*([-*_])\1{2,}\s*$/gmu, ' ')
+  // 统一规则：markdown 元字符一次性清干净，不再逐条匹配「成对 / 落单」。
+  // 这几种都会被 TTS 念成怪音（`*` 念成"星号"，用户实测听到"※"），对听感毫无意义；
+  // 被实时首块截断的半对标记（`**核心`）、落单的 `*`，也在这一条里一并消失。
+  // 但语言标点（。，！？；：、（）《》）必须留——那是断句的唯一依据，
+  // 删了长文会连成一片，标题和正文之间那 0.39 秒的停顿就没了。
+  text = text.replace(/[*_~`#>|※★☆]/gu, '')
+  text = text.replace(/^\s*[-—–]\s*$/gmu, ' ')
+  // 星号删掉后会露出重复标点（"浪漫。*。" → "浪漫。。"），合并成一个，免得念两次停顿
+  text = text.replace(/([。！？；：，、])\1+/gu, '$1')
 
   // 表格里残留的竖线、emoji、各种装饰符号
   text = text.replace(/[|]/gu, ' ')
